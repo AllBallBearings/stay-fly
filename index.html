@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#040513" />
+    <link rel="icon" href="./favicon.svg" />
+    <meta
+      name="description"
+      content="I Gotta Stay Fly — a ridiculous, comfort-first WebXR flying game for Meta Quest."
+    />
+    <title>I Gotta Stay Fly</title>
+  </head>
+  <body>
+    <canvas id="game-canvas" aria-label="I Gotta Stay Fly 3D game"></canvas>
+
+    <div id="vignette" aria-hidden="true"></div>
+
+    <main id="landing" class="screen">
+      <section class="hero glass-panel">
+        <p class="eyebrow">Rule number one</p>
+        <h1>I Gotta<br /><span>Stay Fly</span></h1>
+        <p class="intro">
+          Fly wherever you want. Cruise past waterfalls, skyscrapers, and quiet islands in the clouds.
+        </p>
+
+        <div class="actions">
+          <button id="enter-vr" class="primary" type="button" disabled>
+            <span>Enter VR</span><small>Meta Quest</small>
+          </button>
+          <button id="play-desktop" class="secondary" type="button">
+            Play on desktop
+          </button>
+        </div>
+
+        <p id="xr-status" class="status">Checking WebXR support…</p>
+
+        <div class="safety-note">
+          <span aria-hidden="true">✦</span>
+          <p>
+            Play on a clear, padded surface. Get comfortable before entering VR and stop if
+            you feel discomfort.
+          </p>
+        </div>
+      </section>
+
+      <aside class="controls-card glass-panel" aria-label="Controls">
+        <p class="eyebrow">Flight controls</p>
+        <div class="control-row"><kbd>Shift</kbd><span>Accelerate</span></div>
+        <div class="control-row"><kbd>Ctrl</kbd><span>Brake</span></div>
+        <div class="control-row"><kbd>W A S D</kbd><span>Steer</span></div>
+        <div class="control-row"><kbd>Esc</kbd><span>Pause</span></div>
+        <p class="controller-note">In VR: trigger to fly, thumbstick to steer, A/X to calibrate.</p>
+      </aside>
+    </main>
+
+    <section id="calibration" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel">
+        <p class="step">Before takeoff</p>
+        <h2>Find your neutral pose</h2>
+        <p>
+          Lie face-down in a comfortable Superman pose. Look straight ahead and rest your
+          arms where they feel natural.
+        </p>
+        <button id="calibrate" class="primary" type="button">Set neutral posture</button>
+        <p class="hint">Controller: press A or X · click thumbstick to pause</p>
+      </div>
+    </section>
+
+    <section id="pause-menu" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card glass-panel compact">
+        <p class="step">Flight paused</p>
+        <h2>Take a breath</h2>
+        <label class="toggle-row">
+          <span><strong>Comfort mode</strong><small>Slower flight and gentler turns</small></span>
+          <input id="comfort-mode" type="checkbox" checked />
+        </label>
+        <label class="toggle-row">
+          <span><strong>Dynamic vignette</strong><small>Narrows view during motion</small></span>
+          <input id="vignette-toggle" type="checkbox" checked />
+        </label>
+        <div class="modal-actions">
+          <button id="resume" class="primary" type="button">Resume</button>
+          <button id="recalibrate" class="secondary" type="button">Recalibrate</button>
+          <button id="restart" class="text-button" type="button">Return to launch</button>
+        </div>
+      </div>
+    </section>
+
+    <header id="hud" class="hud hidden" aria-live="polite">
+      <div class="flight-mark"><span>Free flight</span><strong>Stay fly</strong></div>
+      <div class="speed-wrap">
+        <span>Flight speed</span>
+        <div class="speed-track"><i id="speed-fill"></i></div>
+      </div>
+      <small class="pause-hint">Esc · pause</small>
+    </header>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <div id="reticle" class="reticle hidden" aria-hidden="true"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
