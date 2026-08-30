@@ -11,6 +11,12 @@ interface Intent {
   pitch: number;
 }
 
+export interface XRFlightIntent {
+  active: boolean;
+  direction: Vector3;
+  throttle: number;
+}
+
 export class FlightController {
   private speed = 0;
   private throttle = 0;
@@ -18,6 +24,10 @@ export class FlightController {
   private pitchRate = 0;
   private lastSpeed = 0;
   private neutralHeadRotation: Quaternion | null = null;
+  private neutralHeadForward = Vector3.Forward();
+  private baseRigRotation = Quaternion.Identity();
+  private flightDirection = Vector3.Forward();
+  private visualRoll = 0;
 
   constructor(
     private readonly rig: TransformNode,
@@ -39,6 +49,7 @@ export class FlightController {
       this.camera.rotation.y,
       this.camera.rotation.z,
     );
+    this.neutralHeadForward = this.camera.getDirection(Vector3.Forward()).normalize();
   }
 
   reset(position: Vector3, direction: Vector3): void {
@@ -47,15 +58,19 @@ export class FlightController {
     const horizontal = Math.sqrt(direction.x ** 2 + direction.z ** 2);
     const pitch = -Math.atan2(direction.y, horizontal);
     this.rig.rotationQuaternion = Quaternion.FromEulerAngles(pitch, yaw, 0);
+    this.baseRigRotation = this.rig.rotationQuaternion.clone();
+    Vector3.Forward().rotateByQuaternionToRef(this.baseRigRotation, this.flightDirection);
     this.speed = 0;
     this.throttle = 0;
     this.yawRate = 0;
     this.pitchRate = 0;
     this.lastSpeed = 0;
+    this.visualRoll = 0;
   }
 
-  update(deltaSeconds: number, desktopIntent: Intent, gamepad?: Gamepad): FlightTelemetry {
+  update(deltaSeconds: number, desktopIntent: Intent, gamepad?: Gamepad, xrIntent?: XRFlightIntent): FlightTelemetry {
     const dt = Math.min(deltaSeconds, 0.05);
+    if (xrIntent) return this.updateXRFlight(dt, xrIntent);
     const intent = this.mergeIntent(desktopIntent, gamepad);
     const headIntent = this.readHeadIntent();
 
@@ -98,6 +113,71 @@ export class FlightController {
     };
   }
 
+  createXRIntent(controllers: ReadonlyArray<{ position: Vector3; direction: Vector3 }>): XRFlightIntent {
+    const headPosition = this.camera.globalPosition;
+    const activeArms = controllers
+      .map((controller) => {
+        const arm = controller.position.subtract(headPosition);
+        return {
+          ...controller,
+          extension: arm.length(),
+          forwardDistance: Vector3.Dot(arm, this.neutralHeadForward),
+          verticalOffset: arm.y,
+        };
+      })
+      .filter((arm) => arm.extension > 0.3 && arm.forwardDistance > 0.16 && arm.verticalOffset > -0.45);
+
+    if (!activeArms.length) {
+      return { active: false, direction: this.flightDirection.clone(), throttle: 0 };
+    }
+
+    // The most extended arm chooses where you are going; two hands close together add speed.
+    const leader = activeArms.reduce((furthest, arm) => arm.extension > furthest.extension ? arm : furthest);
+    let throttle = Scalar.Clamp((leader.extension - 0.3) / 0.42, 0.3, 0.72);
+    if (activeArms.length > 1) {
+      const separation = Vector3.Distance(activeArms[0].position, activeArms[1].position);
+      const handsTogether = 1 - Scalar.Clamp((separation - 0.12) / 0.7, 0, 1);
+      throttle = Scalar.Lerp(0.38, 1, handsTogether);
+    }
+    return { active: true, direction: leader.direction.normalize(), throttle };
+  }
+
+  private updateXRFlight(dt: number, intent: XRFlightIntent): FlightTelemetry {
+    const maxSpeed = this.settings.comfortMode ? 13 : 21;
+    const targetSpeed = intent.active ? maxSpeed * intent.throttle : 0;
+    const response = intent.active ? 3.8 : 9;
+    this.speed = Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * response));
+    this.throttle = intent.throttle;
+
+    let directionTurn = 0;
+    if (intent.active && intent.direction.lengthSquared() > 0.001) {
+      const desiredDirection = intent.direction.normalize();
+      directionTurn = Math.acos(Scalar.Clamp(Vector3.Dot(this.flightDirection, desiredDirection), -1, 1));
+      const directionResponse = 1 - Math.exp(-dt * 8);
+      this.flightDirection = Vector3.Lerp(this.flightDirection, desiredDirection, directionResponse).normalize();
+    }
+
+    // Head tilt is visual roll only. Looking left/right or up/down never redirects flight.
+    const desiredRoll = Scalar.Clamp(this.readHeadRoll(), -0.58, 0.58);
+    this.visualRoll = Scalar.Lerp(this.visualRoll, desiredRoll, 1 - Math.exp(-dt * 7));
+    this.rig.rotationQuaternion = this.baseRigRotation
+      .multiply(Quaternion.FromEulerAngles(0, 0, this.visualRoll))
+      .normalize();
+    this.rig.position.addInPlace(this.flightDirection.scale(this.speed * dt));
+
+    if (this.rig.position.y < -8) this.rig.position.y = Scalar.Lerp(this.rig.position.y, -8, dt * 2);
+    if (this.rig.position.y > 60) this.rig.position.y = Scalar.Lerp(this.rig.position.y, 60, dt * 2);
+
+    const acceleration = Math.abs(this.speed - this.lastSpeed) / Math.max(dt, 0.001);
+    this.lastSpeed = this.speed;
+    return {
+      speed: this.speed,
+      speedRatio: this.speed / maxSpeed,
+      turnIntensity: Scalar.Clamp(directionTurn / 0.55 + Math.abs(this.visualRoll) / 1.2, 0, 1),
+      accelerationIntensity: Scalar.Clamp(acceleration / 9, 0, 1),
+    };
+  }
+
   private mergeIntent(desktop: Intent, gamepad?: Gamepad): Intent {
     if (!gamepad) return desktop;
     const axes = gamepad.axes;
@@ -122,6 +202,12 @@ export class FlightController {
       Scalar.Clamp(-forward.y * 1.8, -1, 1),
       0,
     );
+  }
+
+  private readHeadRoll(): number {
+    if (!this.neutralHeadRotation || !this.camera.rotationQuaternion) return 0;
+    const delta = this.neutralHeadRotation.conjugate().multiply(this.camera.rotationQuaternion).normalize();
+    return delta.toEulerAngles().z;
   }
 }
 

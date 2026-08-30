@@ -11,6 +11,7 @@ import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Ray } from "@babylonjs/core/Culling/ray";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Engine } from "@babylonjs/core/Engines/engine";
@@ -27,7 +28,7 @@ import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExpe
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
 import { AdvancedDynamicTexture, Control, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui/2D";
 import { SkyWorld } from "./Course";
-import { FlightController, type FlightIntent } from "./FlightController";
+import { FlightController, type FlightIntent, type XRFlightIntent } from "./FlightController";
 import type { GamePhase, GameSettings } from "./types";
 import type { AppUI } from "../ui/AppUI";
 
@@ -46,6 +47,7 @@ export class StarlightGame {
   private pointerIntent = { x: 0, y: 0 };
   private lastFrameTime = performance.now();
   private activeGamepad: Gamepad | undefined;
+  private xrFlightIntent: XRFlightIntent | undefined;
   private previousButtons: boolean[] = [];
   private vrPanel: Mesh | null = null;
 
@@ -143,7 +145,7 @@ export class StarlightGame {
   private beginCalibration(): void {
     this.phase = "calibrating";
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X to calibrate.");
+    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Point an arm to fly; hands down stops.");
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -161,8 +163,9 @@ export class StarlightGame {
     this.lastFrameTime = now;
 
     this.readXRControllers();
+    this.xrFlightIntent = this.readXRFlightIntent();
     if (this.phase === "flying") {
-      const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(), this.activeGamepad);
+      const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(), this.activeGamepad, this.xrFlightIntent);
       this.world.update(now / 1000);
       this.ui?.updateFlight(telemetry);
       const vignette = Math.min(0.7, telemetry.turnIntensity * 0.46 + telemetry.accelerationIntensity * 0.34);
@@ -180,10 +183,10 @@ export class StarlightGame {
   private readDesktopIntent(): FlightIntent {
     const pressed = (...codes: string[]) => codes.some((code) => this.keys.has(code));
     return {
-      throttle: pressed("ShiftLeft", "ShiftRight", "Space") ? 1 : 0,
-      brake: pressed("ControlLeft", "ControlRight") ? 1 : 0,
+      throttle: pressed("ArrowUp", "ShiftLeft", "ShiftRight", "Space") ? 1 : 0,
+      brake: pressed("ArrowDown", "ControlLeft", "ControlRight") ? 1 : 0,
       yaw: Math.max(-1, Math.min(1, (pressed("KeyD", "ArrowRight") ? 1 : 0) - (pressed("KeyA", "ArrowLeft") ? 1 : 0) + this.pointerIntent.x)),
-      pitch: Math.max(-1, Math.min(1, (pressed("KeyS", "ArrowDown") ? 1 : 0) - (pressed("KeyW", "ArrowUp") ? 1 : 0) + this.pointerIntent.y)),
+      pitch: Math.max(-1, Math.min(1, (pressed("KeyS") ? 1 : 0) - (pressed("KeyW") ? 1 : 0) + this.pointerIntent.y)),
     };
   }
 
@@ -204,8 +207,19 @@ export class StarlightGame {
     this.previousButtons = buttons;
   }
 
+  private readXRFlightIntent(): XRFlightIntent | undefined {
+    if (!this.isInXR() || !this.xr) return undefined;
+    const poses = this.xr.input.controllers.map((controller) => {
+      const ray = new Ray(Vector3.Zero(), Vector3.Forward());
+      controller.getWorldPointerRayToRef(ray);
+      return { position: ray.origin.clone(), direction: ray.direction.clone() };
+    });
+    return this.flight.createXRIntent(poses);
+  }
+
   private bindInput(): void {
     window.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
       this.keys.add(event.code);
       if (event.code === "Escape") this.togglePause();
       if (event.code === "KeyR" && (this.phase === "flying" || this.phase === "paused")) this.recalibrate();

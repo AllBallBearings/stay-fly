@@ -6,7 +6,7 @@ This repository contains the first playable vertical slice:
 
 - Objective-free exploration with no score, collectibles, timer, or finish line
 - Floating waterfall islands, crystal pools, neon skylines, and tranquil tree groves
-- Smoothed acceleration, braking, yaw, and pitch with no forced roll
+- Pose-driven Superman/Peter Pan flight with head-tilt roll
 - Neutral-head calibration designed for prone play
 - Meta Quest controller input and desktop keyboard/mouse fallback
 - Comfort mode, dynamic vignette, pause, recalibration, restart, and finish flow
@@ -24,10 +24,11 @@ Open the printed local URL. Choose **Play on desktop**, set your neutral pose, t
 
 | Input | Action |
 | --- | --- |
-| `Shift` or `Space` | Accelerate |
-| `Ctrl` | Brake |
+| `Up arrow` | Accelerate |
+| `Down arrow` | Brake |
 | `W` / `S` | Pitch |
 | `A` / `D` | Turn |
+| `Shift` / `Space` / `Ctrl` | Alternate speed controls |
 | Mouse after clicking the game | Gentle steering |
 | `Esc` | Pause/resume |
 | `R` | Recalibrate |
@@ -38,14 +39,17 @@ Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.
 
 | Input | Action |
 | --- | --- |
-| Trigger | Accelerate |
-| Grip | Brake |
-| Thumbstick | Turn and pitch |
+| Point either controller forward | Fly in that controller's pointing direction |
+| Point both controllers forward | The farther-reaching controller sets the direction |
+| Bring both forward hands closer together | Fly faster |
+| Put both controllers at your sides | Stop flight |
+| Tilt your head left/right | Roll left/right without changing flight direction |
+| Turn or look around | Look freely; flight stays on the path set by your arms |
 | A/X while prompted | Calibrate or retry |
 | Thumbstick click | Pause/resume |
 | B/Y or grip while paused | Recalibrate |
 
-For prone play, lie on a clear padded surface before entering VR. Look in the direction that should feel like “forward,” rest your arms comfortably, and calibrate. The game measures subsequent head motion relative to that pose rather than assuming the player is upright.
+For prone play, lie on a clear padded surface before entering VR. Look in the direction that should feel like “forward,” rest your arms comfortably, and calibrate. Pointing a controller out in front of you begins flight; setting both controllers down at your sides stops it.
 
 ## Build and deploy
 
@@ -64,8 +68,8 @@ The desktop build has been compiled and browser-tested. Before calling a release
 
 1. Entering and exiting immersive VR from Meta Quest Browser.
 2. Calibration while prone on the intended padded surface.
-3. Trigger, grip, thumbstick, pause, and recalibration mappings on both controllers.
+3. Single-arm direction, two-hand speed, hands-down stopping, head-tilt roll, pause, and recalibration on both controllers.
 4. Free flight around every island in both comfort and standard modes.
 5. Sustained frame rate and comfort over multiple 2–5 minute runs.
 
-Hand-position throttle is intentionally not part of this first controller-driven slice. The next milestone is hand tracking with graceful loss-of-tracking behavior, after real-device tuning of the core flight model.
+The controller positions and pointing rays are sampled every XR frame. This still needs real-device tuning for reach thresholds and speed on different body sizes and play postures.
