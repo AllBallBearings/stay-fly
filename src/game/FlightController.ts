@@ -166,12 +166,14 @@ export class FlightController {
     this.speed = Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * response));
     this.throttle = intent.throttle;
 
-    const maxYaw = this.settings.comfortMode ? 0.72 : 1.18;
+    // A full side reach needs to redirect flight in well under a second for obstacle avoidance.
+    const maxYaw = this.settings.comfortMode ? 2.3 : 3.4;
     const maxPitch = this.settings.comfortMode ? 0.34 : 0.52;
     const requestedYaw = intent.active ? intent.yaw * maxYaw : 0;
     const requestedPitch = intent.active ? intent.pitch * maxPitch : 0;
-    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * 6));
-    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * 6));
+    const steeringResponse = intent.active ? 15 : 18;
+    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * steeringResponse));
+    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * steeringResponse));
     this.baseRigRotation = this.baseRigRotation
       .multiply(Quaternion.FromEulerAngles(this.pitchRate * dt, this.yawRate * dt, 0))
       .normalize();
