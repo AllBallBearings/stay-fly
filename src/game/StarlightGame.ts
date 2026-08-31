@@ -144,7 +144,7 @@ export class StarlightGame {
   private beginCalibration(): void {
     this.phase = "calibrating";
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Reach an arm in any direction to fly; hands down stops.");
+    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Reach left or right to steer; hands down stops.");
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -208,7 +208,7 @@ export class StarlightGame {
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
     if (!this.isInXR() || !this.xr) return undefined;
-    const poses = this.xr.input.controllers.map((controller) => ({ position: controller.pointer.absolutePosition.clone() }));
+    const poses = this.xr.input.controllers.map((controller) => ({ position: controller.pointer.position.clone() }));
     return this.flight.createXRIntent(poses);
   }
 

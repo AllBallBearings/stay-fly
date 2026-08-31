@@ -39,17 +39,19 @@ Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.
 
 | Input | Action |
 | --- | --- |
-| Reach either controller away from your head | Fly in the direction of that extended arm |
-| Reach both controllers | The farther-reaching controller sets the direction |
+| Reach either controller away from your head | Begin forward flight; the extended arm steers the virtual world |
+| Reach left/right | Turn the world smoothly in the opposite direction and curve the flight path |
+| Reach up/down | Gently climb/dive |
+| Reach both controllers | The farther-reaching controller controls the turn |
 | Bring both extended hands closer together | Fly faster |
 | Put both controllers at your sides | Stop flight |
 | Tilt your head left/right | Roll left/right without changing flight direction |
-| Turn or look around | Look freely; flight follows where your arms are currently extended |
+| Turn or look around | Look freely; head movement does not steer flight |
 | A/X while prompted | Calibrate or retry |
 | Thumbstick click | Pause/resume |
 | B/Y or grip while paused | Recalibrate |
 
-For prone play, lie on a clear padded surface before entering VR. Look in the direction that should feel like “forward,” rest your arms comfortably, and calibrate. Reaching a controller in any direction begins flight; setting both controllers down at your sides stops it.
+For prone play, lie on a clear padded surface before entering VR. Look in the direction that should feel like “forward,” rest your arms comfortably, and calibrate. Reaching a controller begins forward flight; reach left/right to steer the environment while your body stays still, and set both controllers down at your sides to stop.
 
 ## Build and deploy
 
