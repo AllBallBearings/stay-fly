@@ -24,7 +24,6 @@ export class FlightController {
   private pitchRate = 0;
   private lastSpeed = 0;
   private neutralHeadRotation: Quaternion | null = null;
-  private neutralHeadForward = Vector3.Forward();
   private baseRigRotation = Quaternion.Identity();
   private flightDirection = Vector3.Forward();
   private visualRoll = 0;
@@ -49,7 +48,6 @@ export class FlightController {
       this.camera.rotation.y,
       this.camera.rotation.z,
     );
-    this.neutralHeadForward = this.camera.getDirection(Vector3.Forward()).normalize();
   }
 
   reset(position: Vector3, direction: Vector3): void {
@@ -113,25 +111,28 @@ export class FlightController {
     };
   }
 
-  createXRIntent(controllers: ReadonlyArray<{ position: Vector3; direction: Vector3 }>): XRFlightIntent {
+  createXRIntent(controllers: ReadonlyArray<{ position: Vector3 }>): XRFlightIntent {
     const headPosition = this.camera.globalPosition;
     const activeArms = controllers
       .map((controller) => {
         const arm = controller.position.subtract(headPosition);
+        const extension = arm.length();
         return {
           ...controller,
-          extension: arm.length(),
-          forwardDistance: Vector3.Dot(arm, this.neutralHeadForward),
+          heading: arm.scale(1 / Math.max(extension, 0.0001)),
+          extension,
           verticalOffset: arm.y,
         };
       })
-      .filter((arm) => arm.extension > 0.3 && arm.forwardDistance > 0.16 && arm.verticalOffset > -0.45);
+      // Hands hanging at the player's sides are below head height. Any deliberate reach
+      // around the player is valid, including to either side or fully behind.
+      .filter((arm) => arm.extension > 0.34 && arm.verticalOffset > -0.45);
 
     if (!activeArms.length) {
       return { active: false, direction: this.flightDirection.clone(), throttle: 0 };
     }
 
-    // The most extended arm chooses where you are going; two hands close together add speed.
+    // The most extended arm is the Superman-style heading vector; two hands close together add speed.
     const leader = activeArms.reduce((furthest, arm) => arm.extension > furthest.extension ? arm : furthest);
     let throttle = Scalar.Clamp((leader.extension - 0.3) / 0.42, 0.3, 0.72);
     if (activeArms.length > 1) {
@@ -139,7 +140,7 @@ export class FlightController {
       const handsTogether = 1 - Scalar.Clamp((separation - 0.12) / 0.7, 0, 1);
       throttle = Scalar.Lerp(0.38, 1, handsTogether);
     }
-    return { active: true, direction: leader.direction.normalize(), throttle };
+    return { active: true, direction: leader.heading, throttle };
   }
 
   private updateXRFlight(dt: number, intent: XRFlightIntent): FlightTelemetry {
@@ -153,8 +154,7 @@ export class FlightController {
     if (intent.active && intent.direction.lengthSquared() > 0.001) {
       const desiredDirection = intent.direction.normalize();
       directionTurn = Math.acos(Scalar.Clamp(Vector3.Dot(this.flightDirection, desiredDirection), -1, 1));
-      const directionResponse = 1 - Math.exp(-dt * 8);
-      this.flightDirection = Vector3.Lerp(this.flightDirection, desiredDirection, directionResponse).normalize();
+      this.flightDirection = this.turnToward(desiredDirection, directionTurn, dt);
     }
 
     // Head tilt is visual roll only. Looking left/right or up/down never redirects flight.
@@ -208,6 +208,21 @@ export class FlightController {
     if (!this.neutralHeadRotation || !this.camera.rotationQuaternion) return 0;
     const delta = this.neutralHeadRotation.conjugate().multiply(this.camera.rotationQuaternion).normalize();
     return delta.toEulerAngles().z;
+  }
+
+  private turnToward(desiredDirection: Vector3, angle: number, dt: number): Vector3 {
+    if (angle < 0.002) return desiredDirection.clone();
+    // A capped angular turn stays responsive but keeps even a 180° reversal comfortable.
+    const turnStep = Math.min(angle, 5.2 * dt);
+    let axis = Vector3.Cross(this.flightDirection, desiredDirection);
+    if (axis.lengthSquared() < 0.0001) {
+      axis = Math.abs(this.flightDirection.y) < 0.9 ? Vector3.Up() : Vector3.Right();
+    } else {
+      axis.normalize();
+    }
+    const turned = Vector3.Zero();
+    this.flightDirection.rotateByQuaternionToRef(Quaternion.RotationAxis(axis, turnStep), turned);
+    return turned.normalize();
   }
 }
 

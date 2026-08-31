@@ -11,7 +11,6 @@ import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { Ray } from "@babylonjs/core/Culling/ray";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Engine } from "@babylonjs/core/Engines/engine";
@@ -145,7 +144,7 @@ export class StarlightGame {
   private beginCalibration(): void {
     this.phase = "calibrating";
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Point an arm to fly; hands down stops.");
+    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Reach an arm in any direction to fly; hands down stops.");
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -209,11 +208,7 @@ export class StarlightGame {
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
     if (!this.isInXR() || !this.xr) return undefined;
-    const poses = this.xr.input.controllers.map((controller) => {
-      const ray = new Ray(Vector3.Zero(), Vector3.Forward());
-      controller.getWorldPointerRayToRef(ray);
-      return { position: ray.origin.clone(), direction: ray.direction.clone() };
-    });
+    const poses = this.xr.input.controllers.map((controller) => ({ position: controller.pointer.absolutePosition.clone() }));
     return this.flight.createXRIntent(poses);
   }
 
