@@ -10,7 +10,7 @@ import "@babylonjs/core/Shaders/postprocess.vertex";
 import "@babylonjs/core/Shaders/default.vertex";
 import "@babylonjs/core/Shaders/default.fragment";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Engine } from "@babylonjs/core/Engines/engine";
@@ -208,7 +208,12 @@ export class StarlightGame {
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
     if (!this.isInXR() || !this.xr) return undefined;
-    const poses = this.xr.input.controllers.map((controller) => ({ position: controller.pointer.position.clone() }));
+    const poses = this.xr.input.controllers.map((controller) => {
+      const rotation = controller.pointer.rotationQuaternion ?? Quaternion.Identity();
+      const direction = Vector3.Zero();
+      Vector3.Forward().rotateByQuaternionToRef(rotation, direction);
+      return { position: controller.pointer.position.clone(), direction };
+    });
     return this.flight.createXRIntent(poses);
   }
 

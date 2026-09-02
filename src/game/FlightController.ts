@@ -27,6 +27,7 @@ export class FlightController {
   private baseRigRotation = Quaternion.Identity();
   private controlFrameRotation = Quaternion.Identity();
   private flightDirection = Vector3.Forward();
+  private filteredXRDirection: Vector3 | null = null;
   private visualRoll = 0;
 
   constructor(
@@ -67,6 +68,7 @@ export class FlightController {
     this.pitchRate = 0;
     this.lastSpeed = 0;
     this.visualRoll = 0;
+    this.filteredXRDirection = null;
   }
 
   update(deltaSeconds: number, desktopIntent: Intent, gamepad?: Gamepad, xrIntent?: XRFlightIntent): FlightTelemetry {
@@ -114,7 +116,7 @@ export class FlightController {
     };
   }
 
-  createXRIntent(controllers: ReadonlyArray<{ position: Vector3 }>): XRFlightIntent {
+  createXRIntent(controllers: ReadonlyArray<{ position: Vector3; direction: Vector3 }>): XRFlightIntent {
     // These positions are local to the flight rig. That keeps arm steering independent
     // of the virtual world rotating around the player.
     const headPosition = this.camera.position;
@@ -145,8 +147,15 @@ export class FlightController {
       const handsTogether = 1 - Scalar.Clamp((separation - 0.12) / 0.7, 0, 1);
       throttle = Scalar.Lerp(0.38, 1, handsTogether);
     }
+    // A controller's pointing ray, not a small change in hand position, defines the path.
+    // If two hands are equally extended, average them so tiny tracking noise cannot flip leaders.
+    let localDirection = leader.direction.normalize();
+    if (activeArms.length > 1 && Math.abs(activeArms[0].extension - activeArms[1].extension) < 0.1) {
+      const combinedDirection = activeArms[0].direction.add(activeArms[1].direction);
+      if (combinedDirection.lengthSquared() > 0.001) localDirection = combinedDirection.normalize();
+    }
     const direction = Vector3.Zero();
-    leader.heading.rotateByQuaternionToRef(this.controlFrameRotation, direction);
+    localDirection.rotateByQuaternionToRef(this.controlFrameRotation, direction);
     return {
       active: true,
       throttle,
@@ -165,9 +174,12 @@ export class FlightController {
     let directionTurn = 0;
     if (intent.active && intent.direction.lengthSquared() > 0.001) {
       const desiredDirection = intent.direction.normalize();
-      directionTurn = Math.acos(Scalar.Clamp(Vector3.Dot(this.flightDirection, desiredDirection), -1, 1));
-      const maxTurnRate = this.settings.comfortMode ? 10 : 15;
-      this.flightDirection = this.turnToward(desiredDirection, directionTurn, maxTurnRate * dt);
+      this.filteredXRDirection = this.filteredXRDirection
+        ? this.rotateVectorToward(this.filteredXRDirection, desiredDirection, 12 * dt)
+        : desiredDirection.clone();
+      directionTurn = Math.acos(Scalar.Clamp(Vector3.Dot(this.flightDirection, this.filteredXRDirection), -1, 1));
+      const maxTurnRate = this.settings.comfortMode ? 6.5 : 9;
+      this.flightDirection = this.rotateVectorToward(this.flightDirection, this.filteredXRDirection, maxTurnRate * dt);
       this.baseRigRotation = this.rotationForDirection(this.flightDirection);
     }
 
@@ -224,17 +236,18 @@ export class FlightController {
     return delta.toEulerAngles().z;
   }
 
-  private turnToward(desiredDirection: Vector3, angle: number, maximumStep: number): Vector3 {
+  private rotateVectorToward(currentDirection: Vector3, desiredDirection: Vector3, maximumStep: number): Vector3 {
+    const angle = Math.acos(Scalar.Clamp(Vector3.Dot(currentDirection, desiredDirection), -1, 1));
     if (angle < 0.002) return desiredDirection.clone();
     const turnStep = Math.min(angle, maximumStep);
-    let axis = Vector3.Cross(this.flightDirection, desiredDirection);
+    let axis = Vector3.Cross(currentDirection, desiredDirection);
     if (axis.lengthSquared() < 0.0001) {
-      axis = Math.abs(this.flightDirection.y) < 0.9 ? Vector3.Up() : Vector3.Right();
+      axis = Math.abs(currentDirection.y) < 0.9 ? Vector3.Up() : Vector3.Right();
     } else {
       axis.normalize();
     }
     const turned = Vector3.Zero();
-    this.flightDirection.rotateByQuaternionToRef(Quaternion.RotationAxis(axis, turnStep), turned);
+    currentDirection.rotateByQuaternionToRef(Quaternion.RotationAxis(axis, turnStep), turned);
     return turned.normalize();
   }
 
