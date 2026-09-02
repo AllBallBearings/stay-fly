@@ -14,8 +14,7 @@ interface Intent {
 export interface XRFlightIntent {
   active: boolean;
   throttle: number;
-  yaw: number;
-  pitch: number;
+  direction: Vector3;
 }
 
 export class FlightController {
@@ -25,9 +24,8 @@ export class FlightController {
   private pitchRate = 0;
   private lastSpeed = 0;
   private neutralHeadRotation: Quaternion | null = null;
-  private neutralHeadForward = Vector3.Forward();
-  private neutralHeadRight = Vector3.Right();
   private baseRigRotation = Quaternion.Identity();
+  private controlFrameRotation = Quaternion.Identity();
   private flightDirection = Vector3.Forward();
   private visualRoll = 0;
 
@@ -51,8 +49,7 @@ export class FlightController {
       this.camera.rotation.y,
       this.camera.rotation.z,
     );
-    Vector3.Forward().rotateByQuaternionToRef(this.neutralHeadRotation, this.neutralHeadForward);
-    Vector3.Right().rotateByQuaternionToRef(this.neutralHeadRotation, this.neutralHeadRight);
+    this.controlFrameRotation = this.baseRigRotation.clone();
   }
 
   reset(position: Vector3, direction: Vector3): void {
@@ -62,6 +59,7 @@ export class FlightController {
     const pitch = -Math.atan2(direction.y, horizontal);
     this.rig.rotationQuaternion = Quaternion.FromEulerAngles(pitch, yaw, 0);
     this.baseRigRotation = this.rig.rotationQuaternion.clone();
+    this.controlFrameRotation = this.baseRigRotation.clone();
     Vector3.Forward().rotateByQuaternionToRef(this.baseRigRotation, this.flightDirection);
     this.speed = 0;
     this.throttle = 0;
@@ -136,7 +134,7 @@ export class FlightController {
       .filter((arm) => arm.extension > 0.34 && arm.verticalOffset > -0.45);
 
     if (!activeArms.length) {
-      return { active: false, throttle: 0, yaw: 0, pitch: 0 };
+      return { active: false, throttle: 0, direction: this.flightDirection.clone() };
     }
 
     // The most extended arm is the steering reference; two hands close together add speed.
@@ -147,37 +145,31 @@ export class FlightController {
       const handsTogether = 1 - Scalar.Clamp((separation - 0.12) / 0.7, 0, 1);
       throttle = Scalar.Lerp(0.38, 1, handsTogether);
     }
-    const horizontalForward = Vector3.Dot(leader.heading, this.neutralHeadForward);
-    const horizontalRight = Vector3.Dot(leader.heading, this.neutralHeadRight);
-    const horizontalLength = Math.hypot(horizontalForward, horizontalRight);
+    const direction = Vector3.Zero();
+    leader.heading.rotateByQuaternionToRef(this.controlFrameRotation, direction);
     return {
       active: true,
       throttle,
-      // A lateral arm reach acts like a steering wheel: hold it left/right to bank the virtual path.
-      yaw: horizontalLength > 0.01 ? horizontalRight / horizontalLength : 0,
-      pitch: -leader.heading.y,
+      // Your extended arm lays down the next piece of the flight path in 3D space.
+      direction: direction.normalize(),
     };
   }
 
   private updateXRFlight(dt: number, intent: XRFlightIntent): FlightTelemetry {
-    const maxSpeed = this.settings.comfortMode ? 13 : 21;
+    const maxSpeed = this.settings.comfortMode ? 42 : 60;
     const targetSpeed = intent.active ? maxSpeed * intent.throttle : 0;
-    const response = intent.active ? 3.8 : 9;
+    const response = intent.active ? 5.5 : 12;
     this.speed = Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * response));
     this.throttle = intent.throttle;
 
-    // A full side reach needs to redirect flight in well under a second for obstacle avoidance.
-    const maxYaw = this.settings.comfortMode ? 2.3 : 3.4;
-    const maxPitch = this.settings.comfortMode ? 0.34 : 0.52;
-    const requestedYaw = intent.active ? intent.yaw * maxYaw : 0;
-    const requestedPitch = intent.active ? intent.pitch * maxPitch : 0;
-    const steeringResponse = intent.active ? 15 : 18;
-    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * steeringResponse));
-    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * steeringResponse));
-    this.baseRigRotation = this.baseRigRotation
-      .multiply(Quaternion.FromEulerAngles(this.pitchRate * dt, this.yawRate * dt, 0))
-      .normalize();
-    Vector3.Forward().rotateByQuaternionToRef(this.baseRigRotation, this.flightDirection);
+    let directionTurn = 0;
+    if (intent.active && intent.direction.lengthSquared() > 0.001) {
+      const desiredDirection = intent.direction.normalize();
+      directionTurn = Math.acos(Scalar.Clamp(Vector3.Dot(this.flightDirection, desiredDirection), -1, 1));
+      const maxTurnRate = this.settings.comfortMode ? 10 : 15;
+      this.flightDirection = this.turnToward(desiredDirection, directionTurn, maxTurnRate * dt);
+      this.baseRigRotation = this.rotationForDirection(this.flightDirection);
+    }
 
     // Head tilt is visual roll only. Looking left/right or up/down never redirects flight.
     const desiredRoll = Scalar.Clamp(this.readHeadRoll(), -0.58, 0.58);
@@ -195,7 +187,7 @@ export class FlightController {
     return {
       speed: this.speed,
       speedRatio: this.speed / maxSpeed,
-      turnIntensity: Scalar.Clamp((Math.abs(this.yawRate) + Math.abs(this.pitchRate)) / (maxYaw + maxPitch) + Math.abs(this.visualRoll) / 1.2, 0, 1),
+      turnIntensity: Scalar.Clamp(directionTurn / 1.1 + Math.abs(this.visualRoll) / 1.2, 0, 1),
       accelerationIntensity: Scalar.Clamp(acceleration / 9, 0, 1),
     };
   }
@@ -230,6 +222,27 @@ export class FlightController {
     if (!this.neutralHeadRotation || !this.camera.rotationQuaternion) return 0;
     const delta = this.neutralHeadRotation.conjugate().multiply(this.camera.rotationQuaternion).normalize();
     return delta.toEulerAngles().z;
+  }
+
+  private turnToward(desiredDirection: Vector3, angle: number, maximumStep: number): Vector3 {
+    if (angle < 0.002) return desiredDirection.clone();
+    const turnStep = Math.min(angle, maximumStep);
+    let axis = Vector3.Cross(this.flightDirection, desiredDirection);
+    if (axis.lengthSquared() < 0.0001) {
+      axis = Math.abs(this.flightDirection.y) < 0.9 ? Vector3.Up() : Vector3.Right();
+    } else {
+      axis.normalize();
+    }
+    const turned = Vector3.Zero();
+    this.flightDirection.rotateByQuaternionToRef(Quaternion.RotationAxis(axis, turnStep), turned);
+    return turned.normalize();
+  }
+
+  private rotationForDirection(direction: Vector3): Quaternion {
+    const yaw = Math.atan2(direction.x, direction.z);
+    const horizontal = Math.hypot(direction.x, direction.z);
+    const pitch = -Math.atan2(direction.y, horizontal);
+    return Quaternion.FromEulerAngles(pitch, yaw, 0);
   }
 
 }
