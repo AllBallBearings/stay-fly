@@ -30,6 +30,7 @@ import { AdvancedDynamicTexture, Control, Rectangle, StackPanel, TextBlock } fro
 import { SkyWorld } from "./Course";
 import { FlightController, type FlightIntent, type XRControllerPose, type XRFlightIntent } from "./FlightController";
 import { PlayerArm } from "./PlayerArm";
+import { getWorldNavigation, WORLD_REGIONS } from "./WorldNavigation";
 import type { GamePhase, GameSettings } from "./types";
 import type { AppUI } from "../ui/AppUI";
 
@@ -53,6 +54,7 @@ export class StarlightGame {
   private vrPanel: Mesh | null = null;
   private xrArms = new Map<string, PlayerArm>();
   private trackedPoses: XRControllerPose[] = [];
+  private nextNavigationUpdate = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true, powerPreference: "high-performance" });
@@ -66,6 +68,7 @@ export class StarlightGame {
     this.scene.activeCamera = this.desktopCamera;
 
     this.world = new SkyWorld(this.scene);
+    this.addRegionSigns();
     this.flight = new FlightController(this.flightRig, this.desktopCamera, this.settings, this.world.flightBounds);
     this.flight.reset(this.world.startPosition, this.world.startDirection);
     this.bindInput();
@@ -192,6 +195,17 @@ export class StarlightGame {
       const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(), this.activeGamepad, this.xrFlightIntent);
       this.world.update(now / 1000);
       this.ui?.updateFlight(telemetry);
+      if (!this.isInXR()) {
+        // A subtle desktop-only widening reinforces speed without changing headset optics.
+        const targetFov = 1.08 + telemetry.speedRatio ** 2 * (this.settings.comfortMode ? 0.09 : 0.22);
+        this.desktopCamera.fov += (targetFov - this.desktopCamera.fov) * (1 - Math.exp(-deltaSeconds * 4));
+      }
+      if (now >= this.nextNavigationUpdate) {
+        const camera = this.scene.activeCamera!;
+        const navigation = getWorldNavigation(camera.globalPosition, camera.getForwardRay().direction);
+        this.ui?.updateNavigation(navigation.region, navigation.directions);
+        this.nextNavigationUpdate = now + 150;
+      }
       const vignette = Math.min(0.7, telemetry.turnIntensity * 0.46 + telemetry.accelerationIntensity * 0.34);
       this.ui?.setVignette(vignette);
       this.scene.imageProcessingConfiguration.vignetteWeight = this.settings.vignette ? 1.4 + vignette * 2.4 : 0;
@@ -336,6 +350,29 @@ export class StarlightGame {
     sunMaterial.emissiveColor = new Color3(1, 0.67, 0.26);
     sun.material = sunMaterial;
     sun.infiniteDistance = true;
+  }
+
+  private addRegionSigns(): void {
+    // In-world labels work on the headset too; the desktop HUD is not visible in XR.
+    for (const region of WORLD_REGIONS) {
+      const sign = CreatePlane(`district-sign-${region.id}`, { width: 160, height: 30 }, this.scene);
+      sign.position.copyFrom(region.position).addInPlace(new Vector3(0, region.signHeight, 0));
+      sign.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      sign.isPickable = false;
+      const texture = AdvancedDynamicTexture.CreateForMesh(sign, 1024, 192, false);
+      const panel = new Rectangle();
+      panel.cornerRadius = 28;
+      panel.thickness = 3;
+      panel.color = region.color;
+      panel.background = "#0b182ce6";
+      texture.addControl(panel);
+      const label = new TextBlock();
+      label.text = region.name.toUpperCase();
+      label.color = region.color;
+      label.fontSize = 72;
+      label.fontWeight = "600";
+      panel.addControl(label);
+    }
   }
 
   private showVRPanel(title: string, body: string): void {

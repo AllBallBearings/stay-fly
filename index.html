@@ -34,6 +34,8 @@
         </div>
 
         <p id="xr-status" class="status">Checking WebXR support…</p>
+        <p class="desktop-guide">Desktop: hold Shift, Space or ↑ for top speed. Ctrl or ↓ brakes. A/D turns; W/S climbs/dives.</p>
+        <p class="world-guide">One connected world: city ahead, forest to the right, waterfalls to the left, harbor beyond the city. Fly toward the district signs—no map switching.</p>
 
         <div class="safety-note">
           <span aria-hidden="true">✦</span>
@@ -90,12 +92,13 @@
     </section>
 
     <header id="hud" class="hud hidden" aria-live="polite">
-      <div class="flight-mark"><span>Free flight</span><strong>Stay fly</strong></div>
+      <div class="flight-mark"><span>Current district</span><strong id="region-name">Neon City</strong></div>
       <div class="speed-wrap">
-        <span>Flight speed</span>
+        <span>Flight speed <b id="speed-value">0 km/h</b></span>
         <div class="speed-track"><i id="speed-fill"></i></div>
       </div>
       <small class="pause-hint">Esc · pause</small>
+      <div class="world-navigation"><span id="region-directions"></span><small>Arrows point relative to your view · fly between districts</small></div>
     </header>
 
     <div id="toast" class="toast hidden" role="status"></div>

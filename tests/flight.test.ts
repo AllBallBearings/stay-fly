@@ -7,6 +7,8 @@ import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { FlightController, type XRControllerPose } from '../src/game/FlightController';
 import { PlayerArm } from '../src/game/PlayerArm';
 import { SkyWorld } from '../src/game/Course';
+import { getWorldNavigation, REGION_CONNECTIONS, WORLD_REGIONS } from '../src/game/WorldNavigation';
+import { terrainDisk, terrainHeight, terrainStrip } from '../src/game/Terrain';
 
 const engine = new NullEngine();
 const neutral = { throttle: 0, brake: 0, yaw: 0, pitch: 0 };
@@ -33,6 +35,41 @@ function setup(head = Quaternion.Identity(), start = Vector3.Forward()) {
   return {scene, rig, camera, flight, pose};
 }
 
+check('desktop reaches high speed quickly in both modes and brakes without changing VR limits', () => {
+  for (const comfortMode of [true, false]) for (const fps of [60, 120]) {
+    const {scene, rig, camera} = setup();
+    const flight = new FlightController(rig, camera, {comfortMode, vignette: true});
+    flight.calibrate();
+    let telemetry = flight.update(0, neutral);
+    const max = comfortMode ? 100 : 160;
+    for (let i = 0; i < fps; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 1});
+    assert.ok(telemetry.speed > max * 0.93, `slow acceleration: ${telemetry.speed}`);
+    for (let i = 0; i < fps * 2; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 1});
+    assert.ok(Math.abs(telemetry.speed - max) < 0.1);
+    for (let i = 0; i < fps; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 1, brake: 1});
+    assert.ok(telemetry.speed < 3, `weak brakes: ${telemetry.speed}`);
+    for (let i = 0; i < fps * 3; i++) telemetry = flight.update(1 / fps, neutral);
+    assert.ok(Math.abs(telemetry.speed - (comfortMode ? 22 : 32)) < 0.1);
+    for (let i = 0; i < fps * 2; i++) telemetry = flight.update(1 / fps, neutral, undefined, {active:true, throttle:1, direction:Vector3.Forward()});
+    assert.ok(Math.abs(telemetry.speed - (comfortMode ? 42 : 60)) < 0.01);
+    scene.dispose();
+  }
+});
+check('district navigation follows the viewing heading and all regions share a connected route network', () => {
+  const city = WORLD_REGIONS[0];
+  const facingNorth = getWorldNavigation(city.position, Vector3.Forward());
+  assert.equal(facingNorth.region, 'Neon City');
+  assert.ok(facingNorth.directions.includes('→ Quiet Forest'));
+  const facingEast = getWorldNavigation(city.position, Vector3.Right());
+  assert.ok(facingEast.directions.includes('↑ Quiet Forest'));
+  assert.equal(getWorldNavigation(WORLD_REGIONS[1].position, Vector3.Forward()).region, 'Quiet Forest');
+  assert.equal(getWorldNavigation(new Vector3(3500, 0, 3500), Vector3.Forward()).region, 'Between districts');
+  const visited = new Set<string>([city.id]);
+  for (let i = 0; i < WORLD_REGIONS.length; i++) for (const [a,b] of REGION_CONNECTIONS) {
+    if (visited.has(a) || visited.has(b)) { visited.add(a); visited.add(b); }
+  }
+  assert.equal(visited.size, WORLD_REGIONS.length);
+});
 check('rest is zero; small lifts start slowly; raising either arm is monotonic to half speed', () => {
   const {flight, pose} = setup();
   for (const side of ['left', 'right'] as const) {
@@ -168,12 +205,53 @@ check('visible hands match tracked grips with locally merged geometry in a trans
   arm.dispose();
   assert.equal(scene.getTransformNodeByName('fist-test-left'), null);
 });
+check('city hills stay gentle, natural hills are tall, lakes and district connections remain level', () => {
+  for (const region of WORLD_REGIONS) {
+    let maximum = 0;
+    for (let x = -region.radius; x <= region.radius; x += 20) for (let z = -region.radius; z <= region.radius; z += 20) {
+      const h = terrainHeight(region.id, x, z);
+      assert.ok(Number.isFinite(h) && h >= 0.7);
+      maximum = Math.max(maximum, h);
+    }
+    const city = region.id === 'neon-city' || region.id === 'sky-harbor';
+    assert.ok(city ? maximum > 10 && maximum < 30 : maximum > 95 && maximum < 180, `${region.id}: ${maximum}`);
+    if (!city) {
+      near(terrainHeight(region.id, 0, 0), 0.7);
+      near(terrainHeight(region.id, 90, 0), 0.7);
+    }
+    near(terrainHeight(region.id, region.radius * 0.97, 0), 0.7);
+    for (const [a,b] of REGION_CONNECTIONS) {
+      if (a !== region.id && b !== region.id) continue;
+      const other = WORLD_REGIONS.find((item) => item.id === (a === region.id ? b : a))!;
+      const direction = other.position.subtract(region.position); direction.y = 0; direction.normalize();
+      const join = direction.scale(region.radius * 0.58);
+      near(terrainHeight(region.id, join.x, join.z), 0.7);
+    }
+  }
+});
+check('terrain and sloped road vertices match the shared heightfield with upward normals', () => {
+  for (const id of ['neon-city', 'quiet-grove']) {
+    for (const [data, lift] of [[terrainDisk(id, 650), 0], [terrainStrip(id, [new Vector3(100,0,100), new Vector3(108,0,110), new Vector3(116,0,120)], 16, 0.45), 0.45]] as const) {
+      const positions = data.positions!;
+      for (let i = 0; i < positions.length; i += 3) {
+        near(positions[i + 1], terrainHeight(id, positions[i], positions[i + 2]) + lift);
+        assert.ok(data.normals![i + 1] > 0);
+      }
+      assert.ok(data.indices!.every((index) => index >= 0 && index < positions.length / 3));
+    }
+  }
+});
 check('expanded world builds and batches correctly with city, forest and enclosing sphere', () => {
   const scene = new Scene(engine);
   const world = new SkyWorld(scene);
   assert.ok(scene.getTransformNodeByName('neon-city'));
   assert.ok(scene.getTransformNodeByName('quiet-grove'));
   assert.ok(scene.getTextureByName('city-facade'));
+  for (const [a,b] of REGION_CONNECTIONS) assert.ok(scene.getTransformNodeByName(`region-link-${a}-${b}`));
+  for (const region of WORLD_REGIONS) {
+    const terrain = scene.getMeshByName(`${region.id}-hills`)!;
+    assert.ok(terrain && terrain.getBoundingInfo().boundingBox.maximum.y > 10);
+  }
   assert.ok(scene.meshes.length < 1500, `unbatched meshes: ${scene.meshes.length}`);
   for (const mesh of scene.meshes) {
     assert.ok(mesh.getTotalVertices() > 0, `empty geometry: ${mesh.name}`);

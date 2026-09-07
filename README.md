@@ -35,6 +35,16 @@ Open the printed local URL. Choose **Play on desktop**, set your neutral pose, t
 | `Esc` | Pause/resume |
 | `R` | Recalibrate |
 
+Hold **Shift, Space or Up** for fast flight: desktop top speed is **160 m/s (576 km/h)**, or **100 m/s (360 km/h)** with comfort mode on. Releasing acceleration returns to a 32/22 m/s cruise; **Ctrl or Down** brakes rapidly to 2.5 m/s. Acceleration, turning response and desktop-only field-of-view widening are tuned for high-speed traversal. VR speed and headset field of view are unchanged.
+
+## One connected world
+
+There is no environment selector or loading screen: all five districts coexist. From launch, **Neon City is ahead, Quiet Forest is to the right, Azure Falls is to the left, and Sky Harbor is beyond the city**. Wild Gardens sits beyond the falls. Broad, tree-lined land connections link the districts into one traversable landscape.
+
+Fly toward the floating district signs (visible in desktop and VR). The desktop HUD shows your current district, speed in km/h, and arrows/distances to nearby districts; arrows are relative to the direction you are looking.
+
+Cities have gentle rolling hills, while forests, falls and gardens have much taller hills and broad valleys. Roads and trails follow the terrain; buildings remain upright on level foundations, and trees/boulders sit on the slopes. Lake clearings and the approaches to inter-district paths stay level. Terrain geometry is generated once, not rebuilt during flight.
+
 ## Meta Quest controls
 
 Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.

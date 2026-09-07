@@ -65,6 +65,12 @@ export class AppUI {
 
   updateFlight(telemetry: FlightTelemetry): void {
     element("speed-fill").style.width = `${Math.round(telemetry.speedRatio * 100)}%`;
+    element("speed-value").textContent = `${Math.round(telemetry.speed * 3.6)} km/h`;
+  }
+
+  updateNavigation(region: string, directions: string): void {
+    element("region-name").textContent = region;
+    element("region-directions").textContent = directions;
   }
 
   setVignette(intensity: number): void {

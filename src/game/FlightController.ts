@@ -103,23 +103,24 @@ export class FlightController {
     const intent = this.mergeIntent(desktopIntent, gamepad);
     const headIntent = this.readHeadIntent();
 
-    const maxSpeed = this.settings.comfortMode ? 18 : 27;
-    const cruiseSpeed = this.settings.comfortMode ? 8 : 11;
-    const maxYaw = this.settings.comfortMode ? 0.48 : 0.72;
-    const maxPitch = this.settings.comfortMode ? 0.32 : 0.48;
+    // Desktop has its own speed envelope; do not raise headset speeds implicitly.
+    const maxSpeed = this.settings.comfortMode ? 100 : 160;
+    const cruiseSpeed = this.settings.comfortMode ? 22 : 32;
+    const maxYaw = this.settings.comfortMode ? 1.15 : 1.6;
+    const maxPitch = this.settings.comfortMode ? 0.8 : 1.1;
 
-    const requestedThrottle = Math.max(intent.throttle, 0.22);
-    this.throttle = Scalar.Lerp(this.throttle, requestedThrottle, 1 - Math.exp(-dt * 3.2));
+    const requestedThrottle = Scalar.Clamp(intent.throttle, 0, 1);
+    this.throttle = Scalar.Lerp(this.throttle, requestedThrottle, 1 - Math.exp(-dt * 7));
     const targetSpeed = intent.brake > 0.1
       ? 2.5
       : Scalar.Lerp(cruiseSpeed, maxSpeed, this.throttle);
-    const speedResponse = targetSpeed > this.speed ? 1.2 : 2.3;
+    const speedResponse = targetSpeed > this.speed ? 3.5 : 6;
     this.speed = Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * speedResponse));
 
     const requestedYaw = Scalar.Clamp(intent.yaw + headIntent.x * 0.72, -1, 1) * maxYaw;
     const requestedPitch = Scalar.Clamp(intent.pitch + headIntent.y * 0.72, -1, 1) * maxPitch;
-    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * 4));
-    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * 4));
+    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * 8));
+    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * 8));
 
     const turn = Quaternion.FromEulerAngles(this.pitchRate * dt, this.yawRate * dt, 0);
     this.rig.rotationQuaternion = this.rig.rotationQuaternion!.multiply(turn).normalize();

@@ -1,5 +1,5 @@
 import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { Vector3, Vector4 } from "@babylonjs/core/Maths/math.vector";
+import { Quaternion, Vector3, Vector4 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
@@ -12,6 +12,8 @@ import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import type { Scene } from "@babylonjs/core/scene";
 import type { FlightBounds } from "./FlightController";
+import { REGION_CONNECTIONS, WORLD_REGIONS } from "./WorldNavigation";
+import { terrainDisk, terrainHeight, terrainStrip } from "./Terrain";
 
 interface WaterfallSheet {
   mesh: Mesh;
@@ -55,34 +57,85 @@ export class SkyWorld {
       this.batchScenery(existingMeshes);
       existingMeshes = new Set(this.scene.meshes);
     };
-    const waterfallIsland = this.createIsland("azure-falls", new Vector3(-1200, 50, 400), 1400, 180, "lush");
+    const at = (id: string) => WORLD_REGIONS.find((region) => region.id === id)!.position;
+    const waterfallIsland = this.createIsland("azure-falls", at("azure-falls"), 1400, 180, "lush");
     this.addCrystalPool(waterfallIsland, new Vector3(0, 0.7, 0), 180);
     this.addWaterfall(waterfallIsland, new Vector3(-650, -75, 0), 100, 210);
     this.addGrove(waterfallIsland, 900, 580);
     finishDistrict();
 
-    const cityIsland = this.createIsland("neon-city", new Vector3(0, 5, 550), 1750, 200, "city");
+    const cityIsland = this.createIsland("neon-city", at("neon-city"), 1750, 200, "city");
     this.addCity(cityIsland, 625, 780);
     finishDistrict();
 
-    const groveIsland = this.createIsland("quiet-grove", new Vector3(1550, 11, 700), 1600, 180, "lush");
+    const groveIsland = this.createIsland("quiet-grove", at("quiet-grove"), 1600, 180, "lush");
     this.addGrove(groveIsland, 1300, 690);
     this.addCrystalPool(groveIsland, new Vector3(0, 0.7, 0), 160);
     finishDistrict();
 
-    const harborIsland = this.createIsland("sky-harbor", new Vector3(550, 3, 2100), 1500, 170, "city");
+    const harborIsland = this.createIsland("sky-harbor", at("sky-harbor"), 1500, 170, "city");
     this.addCity(harborIsland, 441, 650);
     this.addWaterfall(harborIsland, new Vector3(700, -70, 0), 70, 190);
     finishDistrict();
 
-    const gardenIsland = this.createIsland("little-garden", new Vector3(-1100, 25, 2000), 1400, 160, "lush");
+    const gardenIsland = this.createIsland("little-garden", at("little-garden"), 1400, 160, "lush");
     this.addGrove(gardenIsland, 700, 580);
     finishDistrict();
 
+    this.addRegionConnections();
     this.addFloatingRocks();
     this.addClouds();
     this.addFlightBoundary();
     finishDistrict();
+  }
+
+  private addRegionConnections(): void {
+    // Broad green ridges join the existing districts into a continuous landscape.
+    // Endpoints overlap island tops so there are no gaps or loading transitions.
+    const grass = this.material("island-grass", new Color3(0.24, 0.34, 0.16), new Color3(0.01, 0.015, 0.005));
+    grass.diffuseTexture = this.surfaceTexture("ground");
+    const cliff = this.material("sunlit-cliff", new Color3(0.46, 0.36, 0.29), new Color3(0.025, 0.02, 0.015));
+    const trail = this.material("district-trail", new Color3(0.38, 0.30, 0.2), Color3.Black());
+    for (const [fromId, toId] of REGION_CONNECTIONS) {
+      const from = WORLD_REGIONS.find((region) => region.id === fromId)!;
+      const to = WORLD_REGIONS.find((region) => region.id === toId)!;
+      const direction = to.position.subtract(from.position).normalize();
+      const start = from.position.add(direction.scale(from.radius * 0.58));
+      const end = to.position.subtract(direction.scale(to.radius * 0.58));
+      start.y = from.position.y;
+      end.y = to.position.y;
+      const delta = end.subtract(start);
+      const length = delta.length();
+      const root = new TransformNode(`region-link-${fromId}-${toId}`, this.scene);
+      root.position.copyFrom(start.add(end).scale(0.5));
+      root.rotationQuaternion = Quaternion.FromEulerAngles(-Math.atan2(delta.y, Math.hypot(delta.x, delta.z)), Math.atan2(delta.x, delta.z), 0);
+      const land = CreateBox("connecting-ridge", { width: 260, height: 65, depth: length }, this.scene);
+      land.parent = root;
+      land.position.y = -32.5;
+      land.material = cliff;
+      const surface = CreateBox("green-transition", { width: 264, height: 0.9, depth: length }, this.scene);
+      surface.parent = root;
+      surface.position.y = 0.25;
+      surface.material = grass;
+      const path = CreateBox("district-path", { width: 18, height: 0.1, depth: length }, this.scene);
+      path.parent = root;
+      path.position.y = 0.76;
+      path.material = trail;
+      for (let z = -length / 2 + 25; z < length / 2 - 25; z += 45) {
+        for (const side of [-1, 1]) {
+          const height = 12 + this.random() * 10;
+          const trunk = CreateCylinder("transition-trunk", { height, diameterTop: 0.5, diameterBottom: 1.4, tessellation: 5 }, this.scene);
+          trunk.parent = root;
+          trunk.position.set(side * (65 + this.random() * 35), height / 2, z);
+          trunk.material = trail;
+          const canopy = CreateIcoSphere("transition-canopy", { radius: height * 0.3, subdivisions: 1, flat: false }, this.scene);
+          canopy.parent = root;
+          canopy.position.copyFrom(trunk.position).addInPlace(new Vector3(0, height * 0.4, 0));
+          canopy.scaling.y = 1.5;
+          canopy.material = grass;
+        }
+      }
+    }
   }
 
   private batchScenery(existingMeshes: ReadonlySet<Scene["meshes"][number]>): void {
@@ -90,6 +143,7 @@ export class SkyWorld {
     // Animated waterfalls, water and the boundary keep their separate materials.
     const batches = new Map<string, Mesh[]>();
     for (const mesh of this.scene.meshes) {
+      if (mesh.metadata?.terrain) { mesh.freezeWorldMatrix(); continue; }
       if (existingMeshes.has(mesh) || !(mesh instanceof Mesh) || !mesh.material || mesh.material.alpha < 1 || mesh.metadata?.canopyLOD) continue;
       mesh.computeWorldMatrix(true);
       const p = mesh.getBoundingInfo().boundingBox.centerWorld;
@@ -144,25 +198,37 @@ export class SkyWorld {
     cliff.scaling.z = 1;
     cliff.material = this.material("sunlit-cliff", new Color3(0.46, 0.36, 0.29), new Color3(0.025, 0.02, 0.015));
 
-    const top = CreateCylinder(`${name}-top`, {
-      diameter: diameter * 0.97,
-      height: 0.9,
-      tessellation: 32,
-    }, this.scene);
+    const top = new Mesh(`${name}-hills`, this.scene);
+    terrainDisk(name, diameter * 0.485).applyToMesh(top);
     top.parent = root;
-    top.position.y = 0.25;
-    top.rotation.y = cliff.rotation.y;
-    top.scaling.z = cliff.scaling.z;
+    // Preserve separate terrain meshes for geometry checks and spatial bounds.
+    top.metadata = { terrain: true, region: name };
     top.material = style === "lush"
       ? this.material("island-grass", new Color3(0.24, 0.34, 0.16), new Color3(0.01, 0.015, 0.005))
       : this.material("city-ground", new Color3(0.27, 0.32, 0.38), new Color3(0.025, 0.035, 0.05));
     if (style === "lush") (top.material as StandardMaterial).diffuseTexture = this.surfaceTexture("ground");
+    const base = CreateCylinder(`${name}-terrain-base`, { diameter: diameter * 0.97, height: 0.9, tessellation: 80 }, this.scene);
+    base.parent = root;
+    base.position.y = 0.2;
+    base.material = top.material;
     return root;
+  }
+
+  private groundStrip(root: TransformNode, name: string, points: Vector3[], width: number, material: StandardMaterial, lift = 0.45): Mesh {
+    const mesh = new Mesh(name, this.scene);
+    terrainStrip(root.name, points, width, lift).applyToMesh(mesh);
+    mesh.parent = root;
+    mesh.material = material;
+    mesh.isPickable = false;
+    return mesh;
   }
 
   private addCrystalPool(root: TransformNode, position: Vector3, diameter: number): void {
     const waterMaterial = this.material("crystal-water", new Color3(0.08, 0.72, 0.92), new Color3(0.05, 0.32, 0.5));
     waterMaterial.alpha = 0.86;
+    // Keep shallow water from depth-fighting the lake bed at long flight distances.
+    waterMaterial.zOffset = -1;
+    waterMaterial.zOffsetUnits = -2;
     const pool = CreateCylinder(`${root.name}-pool`, { diameter, height: 0.24, tessellation: 32 }, this.scene);
     pool.parent = root;
     pool.position.copyFrom(position);
@@ -226,16 +292,12 @@ export class SkyWorld {
     for (let street = 0; street <= grid; street++) {
       const offset = (street - grid / 2) * spacing;
       for (let orientation = 0; orientation < 2; orientation++) {
-        const road = CreateBox(`${root.name}-avenue`, { width: 16, height: 0.1, depth: span }, this.scene);
-        road.parent = root;
-        road.position.set(orientation ? 0 : offset, 0.76, orientation ? offset : 0);
-        road.rotation.y = orientation * Math.PI / 2;
-        road.material = asphalt;
+        const point = (along: number) => new Vector3(orientation ? along : offset, 0, orientation ? offset : along);
+        const points = Array.from({length: Math.ceil(span / 8) + 1}, (_, i) => point(-span / 2 + i * 8));
+        this.groundStrip(root, `${root.name}-avenue`, points, 16, asphalt);
         for (let dash = 0; dash < grid * 3; dash++) {
-          const stripe = CreateBox("lane-marker", { width: 0.3, height: 0.02, depth: 5 }, this.scene);
-          stripe.parent = road;
-          stripe.position.set(0, 0.065, (dash - grid * 1.5) * 16 + 8);
-          stripe.material = roadPaint;
+          const along = (dash - grid * 1.5) * 16 + 8;
+          this.groundStrip(root, "lane-marker", [point(along - 2.5), point(along + 2.5)], 0.3, roadPaint, 0.49);
         }
       }
     }
@@ -247,19 +309,22 @@ export class SkyWorld {
       const width = 19 + this.random() * 9;
       const depth = 19 + this.random() * 9;
       const height = 22 + this.random() * 55 + Math.max(0, 1 - Math.hypot(x, z) / radius) * 95;
-      const sidewalk = CreateBox("building-plinth", { width: 32, depth: 32, height: 0.3 }, this.scene);
+      const corners = [-16, 0, 16].flatMap((dx) => [-16, 0, 16].map((dz) => terrainHeight(root.name, x + dx, z + dz)));
+      const base = Math.max(...corners) + 0.65;
+      const bottom = Math.min(...corners) - 0.8;
+      const sidewalk = CreateBox("building-plinth", { width: 32, depth: 32, height: base - bottom }, this.scene);
       sidewalk.parent = root;
-      sidewalk.position.set(x, 0.9, z);
+      sidewalk.position.set(x, (base + bottom) / 2, z);
       sidewalk.material = concrete;
       const faceUV = [width, width, depth, depth, 0, 0].map((w) => new Vector4(0, 0, w / 24, w ? height / 48 : 0));
       const building = CreateBox(`${root.name}-tower-${index}`, { width, depth, height, faceUV }, this.scene);
       building.parent = root;
-      building.position.set(x, 1 + height / 2, z);
+      building.position.set(x, base + height / 2, z);
       building.material = buildingMaterials[index % buildingMaterials.length];
 
       const roof = CreateBox("rooftop-equipment", { width: width * 0.45, depth: depth * 0.6, height: 3 }, this.scene);
       roof.parent = root;
-      roof.position.set(x, height + 2.5, z);
+      roof.position.set(x, base + height + 1.5, z);
       roof.material = concrete;
 
       if (index % 2 === 0) {
@@ -272,7 +337,7 @@ export class SkyWorld {
       if (index % 7 === 0) {
         const spire = CreateCylinder(`${root.name}-spire-${index}`, { diameterTop: 0, diameterBottom: 1, height: 16, tessellation: 6 }, this.scene);
         spire.parent = root;
-        spire.position.set(building.position.x, height + 9, building.position.z);
+        spire.position.set(building.position.x, base + height + 8, building.position.z);
         spire.material = neonMaterials[(index + 1) % neonMaterials.length];
       }
     }
@@ -293,14 +358,8 @@ export class SkyWorld {
     // A gently winding dirt route connects the forest edge to the lake clearing.
     for (let z = -radius; z < radius - 15; z += 15) {
       if (Math.abs(z) < 105) continue;
-      const from = new Vector3(Math.sin(z / 110) * 65, 0.76, z);
-      const to = new Vector3(Math.sin((z + 15) / 110) * 65, 0.76, z + 15);
-      const direction = to.subtract(from);
-      const trail = CreateBox("forest-trail", { width: 13, height: 0.04, depth: direction.length() + 1 }, this.scene);
-      trail.parent = root;
-      trail.position.copyFrom(from.add(to).scale(0.5));
-      trail.rotation.y = Math.atan2(direction.x, direction.z);
-      trail.material = earth;
+      const points = [0, 5, 10, 15].map((offset) => new Vector3(Math.sin((z + offset) / 110) * 65, 0, z + offset));
+      this.groundStrip(root, "forest-trail", points, 13, earth);
     }
 
     for (let index = 0; index < count; index += 1) {
@@ -313,12 +372,13 @@ export class SkyWorld {
       if (distance < 100 || Math.abs(x - Math.sin(z / 110) * 65) < 15) continue;
       const trunk = CreateCylinder(`${root.name}-trunk-${index}`, { diameterTop: 0.5, diameterBottom: 1.4, height, tessellation: 7 }, this.scene);
       trunk.parent = root;
-      trunk.position.set(x, 0.7 + height / 2, z);
+      const ground = terrainHeight(root.name, x, z);
+      trunk.position.set(x, ground + height / 2 - 0.25, z);
       trunk.material = trunkMaterial;
       if (index % 9 === 0) {
         const rock = CreateIcoSphere("forest-boulder", { radius: 1.5 + this.random() * 2, subdivisions: 2, flat: true }, this.scene);
         rock.parent = root;
-        rock.position.set(x + 4, 1.2, z + 3);
+        rock.position.set(x + 4, terrainHeight(root.name, x + 4, z + 3) + 0.5, z + 3);
         rock.scaling.set(1.3, 0.7, 0.85);
         rock.material = rockMaterial;
       }
@@ -329,7 +389,7 @@ export class SkyWorld {
           ? CreateCylinder(`${root.name}-pine`, { diameterTop: 0, diameterBottom: crownRadius * (2 - tier * 0.35), height: 9, tessellation: 9 }, this.scene)
           : CreateIcoSphere(`${root.name}-canopy`, { radius: crownRadius * (1 - tier * 0.15), subdivisions: 2, flat: false }, this.scene);
         crown.parent = root;
-        crown.position.set(x + (index % 3 ? Math.sin(tier * 3) * 3 : 0), height - 3 + tier * 4, z + (index % 3 ? Math.cos(tier * 3) * 3 : 0));
+        crown.position.set(x + (index % 3 ? Math.sin(tier * 3) * 3 : 0), ground + height - 3 + tier * 4, z + (index % 3 ? Math.cos(tier * 3) * 3 : 0));
         crown.scaling.set(0.85 + this.random() * 0.3, 0.7 + this.random() * 0.3, 0.85 + this.random() * 0.3);
         crown.material = leafMaterials[index % leafMaterials.length];
         // Distant foliage keeps its silhouette with fewer polygons. These sources are
