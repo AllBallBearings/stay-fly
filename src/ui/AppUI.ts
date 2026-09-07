@@ -63,6 +63,16 @@ export class AppUI {
     this.reticle.classList.toggle("hidden", phase !== "flying");
   }
 
+  setCalibrationStep(step: "hover" | "reach"): void {
+    const hover = step === "hover";
+    element("calibration-step").textContent = hover ? "Step 1 of 2 · Before takeoff" : "Step 2 of 2 · Measure your reach";
+    element("calibration-title").textContent = hover ? "Set your hover pose" : "Set your full reach";
+    element("calibration-description").textContent = hover
+      ? "Look ahead and rest both arms at your sides. This records the pose that stops your flight."
+      : "Point one or both arms straight ahead at full extension. This records where maximum speed begins.";
+    element<HTMLButtonElement>("calibrate").textContent = hover ? "Set hover posture" : "Set full reach";
+  }
+
   updateFlight(telemetry: FlightTelemetry): void {
     element("speed-fill").style.width = `${Math.round(telemetry.speedRatio * 100)}%`;
     element("speed-value").textContent = `${Math.round(telemetry.speed * 3.6)} km/h`;

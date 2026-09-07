@@ -60,7 +60,8 @@ export class FlightController {
     this.neutralHeadRotation = null;
   }
 
-  calibrate(controllers: ReadonlyArray<XRControllerPose> = []): void {
+  /** Records the no-thrust/rest pose. Reach is measured deliberately in a second step. */
+  calibrateHover(controllers: ReadonlyArray<XRControllerPose> = []): void {
     const rotation = this.camera.rotationQuaternion;
     this.neutralHeadRotation = rotation ? rotation.clone() : Quaternion.FromEulerAngles(
       this.camera.rotation.x,
@@ -73,11 +74,43 @@ export class FlightController {
     for (const controller of controllers) {
       const arm = controller.position.subtract(this.getShoulderPosition(controller.handedness));
       if (arm.length() < 0.25) continue;
-      this.armLengths.set(controller.handedness, Scalar.Clamp(arm.length(), 0.45, 0.8));
       this.restDirections.set(controller.handedness, arm.normalize());
     }
     this.speed = 0;
     this.lastSpeed = 0;
+  }
+
+  /**
+   * Stores the player's real, controller-to-shoulder reach while their arm is fully
+   * extended in front. A held-down arm is deliberately rejected as a max-speed pose.
+   */
+  calibrateFullReach(controllers: ReadonlyArray<XRControllerPose>): number {
+    let captured = 0;
+    for (const controller of controllers) {
+      const arm = controller.position.subtract(this.getShoulderPosition(controller.handedness));
+      const length = arm.length();
+      if (length < 0.3) continue;
+      const direction = arm.scale(1 / length);
+      const rest = this.restDirections.get(controller.handedness);
+      // Require a meaningfully lifted pose so a second accidental A/X press at rest
+      // cannot turn the user's side-arm length into their flight range.
+      if (rest && Vector3.Dot(direction, rest) > 0.7) continue;
+      this.armLengths.set(controller.handedness, Scalar.Clamp(length, 0.35, 1.15));
+      captured++;
+    }
+    return captured;
+  }
+
+  /** Compatibility helper for desktop and test setup: capture hover and any supplied reach. */
+  calibrate(controllers: ReadonlyArray<XRControllerPose> = []): void {
+    this.calibrateHover(controllers);
+    if (controllers.length) {
+      // Existing one-step callers may intentionally provide an already raised pose.
+      for (const controller of controllers) {
+        const arm = controller.position.subtract(this.getShoulderPosition(controller.handedness));
+        if (arm.length() >= 0.25) this.armLengths.set(controller.handedness, Scalar.Clamp(arm.length(), 0.35, 1.15));
+      }
+    }
   }
 
   reset(position: Vector3, direction: Vector3): void {
@@ -162,6 +195,8 @@ export class FlightController {
         const heading = arm.scale(1 / Math.max(extension, 0.0001));
         const rest = this.restDirections.get(controller.handedness) ?? defaultRest;
         const liftAngle = Math.acos(Scalar.Clamp(Vector3.Dot(heading, rest), -1, 1));
+        // Until a deliberate reach calibration completes, retain a conservative
+        // fallback. Once captured, full speed maps to this user's actual arm length.
         const fullReach = this.armLengths.get(controller.handedness) ?? 0.65;
         // Resting straight arms have full length too. Lift away from the recorded rest
         // pose AND extension determine thrust; there is no minimum moving speed.

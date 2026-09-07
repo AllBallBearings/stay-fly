@@ -48,7 +48,8 @@
 
       <aside class="controls-card glass-panel" aria-label="Meta Quest flight controls">
         <p class="eyebrow">Meta Quest: how to fly</p>
-        <div class="control-row"><kbd>1</kbd><span>Arms at your sides, look ahead, press A or X</span></div>
+        <div class="control-row"><kbd>1</kbd><span>Arms at your sides, look ahead, press A or X to set hover</span></div>
+        <div class="control-row"><kbd>2</kbd><span>Point an arm fully forward, then press A or X to set your real reach</span></div>
         <div class="control-row"><kbd>POINT</kbd><span>Your arms continuously set your flight direction</span></div>
         <div class="control-row"><kbd>ONE ARM</kbd><span>Reach farther to go from slow to medium speed</span></div>
         <div class="control-row"><kbd>TWO ARMS</kbd><span>Reach farther to go from slow to bullet-fast</span></div>
@@ -60,14 +61,11 @@
 
     <section id="calibration" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card glass-panel">
-        <p class="step">Before takeoff</p>
-        <h2>Set your hover pose</h2>
-        <p>
-          Get comfortable standing, seated, or lying in a Superman pose. Look ahead and
-          rest both arms at your sides. This records the pose that stops your flight.
-        </p>
+        <p id="calibration-step" class="step">Step 1 of 2 · Before takeoff</p>
+        <h2 id="calibration-title">Set your hover pose</h2>
+        <p id="calibration-description">Look ahead and rest both arms at your sides. This records the pose that stops your flight.</p>
         <button id="calibrate" class="primary" type="button">Set hover posture</button>
-        <p class="hint">Controller: press A or X · point your arms to steer · click thumbstick to pause</p>
+        <p class="hint">Controller: press A or X for each step · point your arms to steer · click thumbstick to pause</p>
       </div>
     </section>
 

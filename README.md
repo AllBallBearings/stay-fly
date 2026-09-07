@@ -60,7 +60,7 @@ Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.
 | Thumbstick click | Pause/resume |
 | B/Y or grip while paused | Recalibrate |
 
-Calibrate while looking ahead with **both arms at your sides**. This records your resting arm directions and estimates your reach. Seated, standing and prone play use the same controls. For prone play, get comfortable on a clear padded surface first. Raise and extend your arms to fly; lower or retract them to slow down. Your view follows the headset, so you can look elsewhere without changing course, then move your arms toward the new direction to steer there.
+VR calibration has two steps: first look ahead with **both arms at your sides** and press A/X to set hover; then point one or both arms **straight ahead at full extension** and press A/X again. The second pose captures your actual controller-to-shoulder reach, so maximum speed begins at your own fully extended arm position rather than a guessed distance. Seated, standing and prone play use the same controls. For prone play, get comfortable on a clear padded surface first. Raise and extend your arms to fly; lower or retract them to slow down. Your view follows the headset, so you can look elsewhere without changing course, then move your arms toward the new direction to steer there.
 
 Steering uses a single spherical response that closes about 95% of the angle in 120 ms, including a full reversal. The rig never rotates toward the movement vector. Standard VR speed is up to 30 m/s with one arm and 60 m/s with two; comfort mode caps these at 21 and 42 m/s. Missing controller poses contribute no thrust.
 

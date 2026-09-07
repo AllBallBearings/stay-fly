@@ -96,6 +96,19 @@ check('pulling a raised hand back reduces speed continuously to zero', () => {
   }
   near(previous, 0);
 });
+check('two-step calibration maps each player reach to full thrust and rejects an accidental rest capture', () => {
+  const {flight, pose} = setup();
+  const rest = [pose('left', Vector3.Down(), 0.54), pose('right', Vector3.Down(), 0.58)];
+  flight.calibrateHover(rest);
+  assert.equal(flight.calibrateFullReach(rest), 0);
+  const full = [pose('left', Vector3.Forward(), 0.82), pose('right', Vector3.Forward(), 0.76)];
+  assert.equal(flight.calibrateFullReach(full), 2);
+  near(flight.createXRIntent(full).throttle, 1);
+  const medium = [pose('left', Vector3.Forward(), 0.66)];
+  const mediumThrottle = flight.createXRIntent(medium).throttle;
+  assert.ok(mediumThrottle > 0 && mediumThrottle < 0.5, `uncalibrated gradient: ${mediumThrottle}`);
+  near(flight.createXRIntent([pose('left', Vector3.Forward(), 0.82)]).throttle, 0.5);
+});
 check('second arm adds thrust without a mode-switch jump; equal reaches average centrally', () => {
   const {flight, pose} = setup();
   let previous = 0.5;

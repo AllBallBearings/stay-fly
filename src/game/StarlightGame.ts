@@ -54,6 +54,7 @@ export class StarlightGame {
   private vrPanel: Mesh | null = null;
   private xrArms = new Map<string, PlayerArm>();
   private trackedPoses: XRControllerPose[] = [];
+  private calibrationStep: "hover" | "reach" = "hover";
   private nextNavigationUpdate = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -138,12 +139,24 @@ export class StarlightGame {
 
   calibrate(): void {
     if (this.phase !== "calibrating") return;
-    this.flight.calibrate(this.isInXR() ? this.trackedPoses : []);
+    if (this.isInXR() && this.calibrationStep === "hover") {
+      this.flight.calibrateHover(this.trackedPoses);
+      this.calibrationStep = "reach";
+      this.ui?.setCalibrationStep("reach");
+      this.showVRPanel("SET YOUR FULL REACH", "Point one or both arms straight ahead at full extension, then press A or X. This sets exactly where full flight speed begins.");
+      return;
+    }
+    if (this.isInXR() && this.flight.calibrateFullReach(this.trackedPoses) === 0) {
+      this.ui?.showToast("Extend an arm forward, then try again");
+      this.showVRPanel("FULL REACH NOT CAPTURED", "Point an arm straight ahead at full extension, then press A or X. Keep your arm clear of the rest position.");
+      return;
+    }
+    if (!this.isInXR()) this.flight.calibrateHover();
     this.hideVRPanel();
     this.phase = "flying";
     this.lastFrameTime = performance.now();
     this.ui?.setPhase(this.phase);
-    this.ui?.showToast("Neutral pose set — go anywhere");
+    this.ui?.showToast(this.isInXR() ? "Reach calibrated — go anywhere" : "Neutral pose set — go anywhere");
   }
 
   resume(): void {
@@ -169,8 +182,10 @@ export class StarlightGame {
 
   private beginCalibration(): void {
     this.phase = "calibrating";
+    this.calibrationStep = "hover";
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("SET YOUR HOVER POSE", "Look ahead with both arms resting at your sides, then press A or X. Raise and extend an arm to fly; two arms give full speed.");
+    this.ui?.setCalibrationStep("hover");
+    this.showVRPanel("STEP 1: SET YOUR HOVER POSE", "Look ahead with both arms resting at your sides, then press A or X. Next, you will measure your fully extended reach.");
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
