@@ -24,10 +24,12 @@ import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExperience";
+import type { WebXRInputSource } from "@babylonjs/core/XR/webXRInputSource";
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
 import { AdvancedDynamicTexture, Control, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui/2D";
 import { SkyWorld } from "./Course";
-import { FlightController, type FlightIntent, type XRFlightIntent } from "./FlightController";
+import { FlightController, type FlightIntent, type XRControllerPose, type XRFlightIntent } from "./FlightController";
+import { PlayerArm } from "./PlayerArm";
 import type { GamePhase, GameSettings } from "./types";
 import type { AppUI } from "../ui/AppUI";
 
@@ -47,8 +49,10 @@ export class StarlightGame {
   private lastFrameTime = performance.now();
   private activeGamepad: Gamepad | undefined;
   private xrFlightIntent: XRFlightIntent | undefined;
-  private previousButtons: boolean[] = [];
+  private previousButtons = new Map<Gamepad, boolean[]>();
   private vrPanel: Mesh | null = null;
+  private xrArms = new Map<string, PlayerArm>();
+  private trackedPoses: XRControllerPose[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true, powerPreference: "high-performance" });
@@ -56,13 +60,13 @@ export class StarlightGame {
     this.flightRig = new TransformNode("flight-rig", this.scene);
     this.desktopCamera = new UniversalCamera("desktop-camera", Vector3.Zero(), this.scene);
     this.desktopCamera.minZ = 0.05;
-    this.desktopCamera.maxZ = 1800;
+    this.desktopCamera.maxZ = 12000;
     this.desktopCamera.fov = 1.08;
     this.desktopCamera.parent = this.flightRig;
     this.scene.activeCamera = this.desktopCamera;
 
     this.world = new SkyWorld(this.scene);
-    this.flight = new FlightController(this.flightRig, this.desktopCamera, this.settings);
+    this.flight = new FlightController(this.flightRig, this.desktopCamera, this.settings, this.world.flightBounds);
     this.flight.reset(this.world.startPosition, this.world.startDirection);
     this.bindInput();
     this.engine.runRenderLoop(() => this.frame());
@@ -77,9 +81,27 @@ export class StarlightGame {
 
     this.xr = await this.scene.createDefaultXRExperienceAsync({
       disableDefaultUI: true,
+      disablePointerSelection: true,
       disableTeleportation: true,
+      disableNearInteraction: true,
+      disableHandTracking: true,
+      inputOptions: { doNotLoadControllerMeshes: true },
       optionalFeatures: true,
       uiOptions: { sessionMode: "immersive-vr", referenceSpaceType: "local-floor" },
+    });
+
+    this.xr.input.onControllerAddedObservable.add((controller) => {
+      this.xrArms.set(controller.uniqueId, new PlayerArm(this.scene, this.flightRig, controller.uniqueId, controller.inputSource.handedness === "left"));
+    });
+    this.xr.input.onControllerRemovedObservable.add((controller) => this.detachXRArm(controller));
+
+    this.xr.baseExperience.onInitialXRPoseSetObservable.add((camera) => {
+      // Babylon copies the desktop camera's WORLD transform on entry. This game moves
+      // a parent rig, so importing that transform again doubles the launch translation
+      // inside XR reference space. Keep native tracking local to the existing rig.
+      camera.parent = this.flightRig;
+      camera.position.set(0, 0, 0);
+      camera.rotationQuaternion.copyFrom(Quaternion.Identity());
     });
 
     this.xr.baseExperience.onStateChangedObservable.add((state) => {
@@ -88,6 +110,7 @@ export class StarlightGame {
         const camera = this.xr.baseExperience.camera;
         camera.parent = this.flightRig;
         camera.minZ = 0.05;
+        camera.maxZ = 12000;
         this.flight.setCamera(camera);
         this.beginCalibration();
       }
@@ -112,7 +135,7 @@ export class StarlightGame {
 
   calibrate(): void {
     if (this.phase !== "calibrating") return;
-    this.flight.calibrate();
+    this.flight.calibrate(this.isInXR() ? this.trackedPoses : []);
     this.hideVRPanel();
     this.phase = "flying";
     this.lastFrameTime = performance.now();
@@ -144,7 +167,7 @@ export class StarlightGame {
   private beginCalibration(): void {
     this.phase = "calibrating";
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("FIND YOUR NEUTRAL POSE", "Get comfortable, look ahead, then press A or X. Reach left or right to steer; hands down stops.");
+    this.showVRPanel("SET YOUR HOVER POSE", "Look ahead with both arms resting at your sides, then press A or X. Raise and extend an arm to fly; two arms give full speed.");
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -161,8 +184,10 @@ export class StarlightGame {
     const deltaSeconds = (now - this.lastFrameTime) / 1000;
     this.lastFrameTime = now;
 
-    this.readXRControllers();
     this.xrFlightIntent = this.readXRFlightIntent();
+    this.readXRControllers();
+    // A/X may just have calibrated the body pose used by this frame's controls.
+    if (this.isInXR()) this.xrFlightIntent = this.flight.createXRIntent(this.trackedPoses);
     if (this.phase === "flying") {
       const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(), this.activeGamepad, this.xrFlightIntent);
       this.world.update(now / 1000);
@@ -190,31 +215,58 @@ export class StarlightGame {
   }
 
   private readXRControllers(): void {
-    this.activeGamepad = this.xr?.input.controllers
-      .map((controller) => controller.inputSource.gamepad)
-      .find((gamepad): gamepad is Gamepad => Boolean(gamepad));
-    if (!this.activeGamepad && !this.isInXR()) {
-      this.activeGamepad = Array.from(navigator.getGamepads?.() ?? []).find((gamepad): gamepad is Gamepad => Boolean(gamepad));
+    const gamepads = (this.isInXR()
+      ? this.xr!.input.controllers.map((controller) => controller.inputSource.gamepad)
+      : Array.from(navigator.getGamepads?.() ?? []))
+      .filter((gamepad): gamepad is Gamepad => Boolean(gamepad));
+    this.activeGamepad = gamepads[0];
+    let calibrate = false;
+    let pause = false;
+    let recalibrate = false;
+    for (const gamepad of gamepads) {
+      const buttons = gamepad.buttons.map((button) => button.pressed);
+      const previous = this.previousButtons.get(gamepad) ?? [];
+      const pressed = (index: number) => Boolean(buttons[index] && !previous[index]);
+      calibrate ||= pressed(4) || pressed(5) || pressed(0);
+      pause ||= pressed(3) || pressed(7);
+      recalibrate ||= pressed(1) || pressed(5);
+      this.previousButtons.set(gamepad, buttons);
     }
-    if (!this.activeGamepad) return;
-
-    const buttons = this.activeGamepad.buttons.map((button) => button.pressed);
-    const justPressed = (index: number) => Boolean(buttons[index] && !this.previousButtons[index]);
-    if ((justPressed(4) || justPressed(5) || justPressed(0)) && this.phase === "calibrating") this.calibrate();
-    if (justPressed(3) || justPressed(7)) this.togglePause();
-    if ((justPressed(1) || justPressed(5)) && this.phase === "paused") this.recalibrate();
-    this.previousButtons = buttons;
+    for (const gamepad of this.previousButtons.keys()) if (!gamepads.includes(gamepad)) this.previousButtons.delete(gamepad);
+    // One state transition per frame, regardless of how many controllers were pressed.
+    if (this.phase === "calibrating" && calibrate) this.calibrate();
+    else if (this.phase === "paused" && recalibrate) this.recalibrate();
+    else if (pause) this.togglePause();
   }
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
     if (!this.isInXR() || !this.xr) return undefined;
-    const poses = this.xr.input.controllers.map((controller) => {
-      const rotation = controller.pointer.rotationQuaternion ?? Quaternion.Identity();
-      const direction = Vector3.Zero();
-      Vector3.Forward().rotateByQuaternionToRef(rotation, direction);
-      return { position: controller.pointer.position.clone(), direction };
-    });
-    return this.flight.createXRIntent(poses);
+    const manager = this.xr.baseExperience.sessionManager;
+    this.trackedPoses = [];
+    for (const controller of this.xr.input.controllers) {
+      const source = controller.inputSource;
+      const arm = this.xrArms.get(controller.uniqueId);
+      // A pointing ray is not an anatomical grip pose; never render a wrist from it.
+      const pose = source.gripSpace && manager.currentFrame?.getPose(source.gripSpace, manager.referenceSpace);
+      if (!pose || source.targetRayMode !== "tracked-pointer") {
+        arm?.root.setEnabled(false);
+        continue;
+      }
+      const p = pose.transform.position;
+      const q = pose.transform.orientation;
+      const position = new Vector3(p.x, p.y, -p.z).scaleInPlace(manager.worldScalingFactor);
+      const rotation = PlayerArm.rotationFromGrip(new Quaternion(q.x, q.y, -q.z, -q.w), source.handedness === "left");
+      this.trackedPoses.push({ position, handedness: source.handedness });
+      const shoulder = this.flight.getShoulderPosition(source.handedness);
+      const pole = shoulder.subtract(this.xr.baseExperience.camera.position);
+      arm?.update(shoulder, position, rotation, pole);
+    }
+    return this.flight.createXRIntent(this.trackedPoses);
+  }
+
+  private detachXRArm(controller: WebXRInputSource): void {
+    this.xrArms.get(controller.uniqueId)?.dispose();
+    this.xrArms.delete(controller.uniqueId);
   }
 
   private bindInput(): void {
@@ -241,7 +293,7 @@ export class StarlightGame {
     scene.clearColor = new Color4(0.22, 0.48, 0.76, 1);
     scene.ambientColor = new Color3(0.34, 0.44, 0.55);
     scene.fogMode = Scene.FOGMODE_EXP2;
-    scene.fogDensity = 0.00115;
+    scene.fogDensity = 0.00016;
     scene.fogColor = new Color3(0.34, 0.58, 0.78);
 
     const ambient = new HemisphericLight("ambient", new Vector3(0.2, 1, -0.15), scene);
@@ -268,7 +320,7 @@ export class StarlightGame {
   }
 
   private createSky(scene: Scene): void {
-    const dome = CreateSphere("sky-dome", { diameter: 1500, segments: 20, sideOrientation: Mesh.BACKSIDE }, scene);
+    const dome = CreateSphere("sky-dome", { diameter: 20000, segments: 20, sideOrientation: Mesh.BACKSIDE }, scene);
     const material = new StandardMaterial("sky", scene);
     material.disableLighting = true;
     material.backFaceCulling = false;

@@ -6,9 +6,11 @@ This repository contains the first playable vertical slice:
 
 - Objective-free exploration with no score, collectibles, timer, or finish line
 - Floating waterfall islands, crystal pools, neon skylines, and tranquil tree groves
-- Pose-driven Superman/Peter Pan flight with head-tilt roll
+- Arm-driven Superman/Peter Pan flight with independent head tracking
 - Neutral-head calibration designed for prone play
 - Meta Quest controller input and desktop keyboard/mouse fallback
+- First-person tapered arms, bending elbows, natural wrist/palm shapes, curled fingers and mirrored thumbs; no controller lasers
+- A visible spherical flight boundary surrounding the landscape
 - Comfort mode, dynamic vignette, pause, recalibration, restart, and finish flow
 - Quest-visible in-world calibration and pause instructions
 - Static production build and GitHub Pages deployment workflow
@@ -39,23 +41,24 @@ Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.
 
 | Input | Action |
 | --- | --- |
-| Reach either controller away from your head | Begin flight and aim that controller to define the next 3D flight path |
-| Aim the extended controller left/right/up/down | The virtual world follows that direction with a tightly smoothed turn |
-| Reach both controllers | Aim them together; hands closer together increase speed |
-| Bring both extended hands closer together | Fly faster |
-| Put both controllers at your sides | Stop flight |
-| Tilt your head left/right | Roll left/right without changing flight direction |
+| Raise and extend an arm | Smooth gradient from hover to half speed, following the shoulder-to-hand direction |
+| Raise and extend both arms | Each arm contributes up to half speed; equal reaches average their directions centrally |
+| Lower or retract your arms | Reduce speed continuously, including very slow movement just above the rest pose |
+| Put both controllers at your calibrated rest position | Stop immediately and hover, without altitude drift |
 | Turn or look around | Look freely; head movement does not steer flight |
 | A/X while prompted | Calibrate or retry |
 | Thumbstick click | Pause/resume |
 | B/Y or grip while paused | Recalibrate |
 
-For prone play, lie on a clear padded surface before entering VR. Look in the direction that should feel like “forward,” rest your arms comfortably, and calibrate. Aim an extended controller like the roller-coaster track immediately in front of you: its pointing direction sets the next flight vector while your body stays still. Set both controllers down at your sides to stop.
+Calibrate while looking ahead with **both arms at your sides**. This records your resting arm directions and estimates your reach. Seated, standing and prone play use the same controls. For prone play, get comfortable on a clear padded surface first. Raise and extend your arms to fly; lower or retract them to slow down. Your view follows the headset, so you can look elsewhere without changing course, then move your arms toward the new direction to steer there.
+
+Steering uses a single spherical response that closes about 95% of the angle in 120 ms, including a full reversal. The rig never rotates toward the movement vector. Standard VR speed is up to 30 m/s with one arm and 60 m/s with two; comfort mode caps these at 21 and 42 m/s. Missing controller poses contribute no thrust.
 
 ## Build and deploy
 
 ```bash
 npm run build
+npm test
 npm run preview
 ```
 
@@ -69,8 +72,12 @@ The desktop build has been compiled and browser-tested. Before calling a release
 
 1. Entering and exiting immersive VR from Meta Quest Browser.
 2. Calibration while prone on the intended padded surface.
-3. Single-arm direction, two-hand speed, hands-down stopping, head-tilt roll, pause, and recalibration on both controllers.
+3. Slowly raise each arm from rest; test retraction, two-arm blending, hover, head-only turns, and abrupt direction changes.
 4. Free flight around every island in both comfort and standard modes.
 5. Sustained frame rate and comfort over multiple 2–5 minute runs.
 
-The controller positions and pointing rays are sampled every XR frame. This still needs real-device tuning for reach thresholds and speed on different body sizes and play postures.
+Controller grip poses are sampled from the current XR frame. Left/right hand meshes are aligned to WebXR grip axes, with forearm roll following the wrists. Hands use a single merged mesh each to keep rendering overhead small. Shoulder orientation is fixed at calibration; elbows are inferred by a two-bone visual arm model because controllers do not track elbows or shoulders. Physical headset testing is still needed to judge comfort, body-size fit and sustained frame rate.
+
+The city districts contain roughly 1 km of streets each, with windowed towers, sidewalks, roof equipment and open avenues. Forest islands span 1.4–1.6 km, with mixed broadleaf/conifer canopies, lakes and winding flight corridors. At moderate speed, crossing a district now takes tens of seconds. Opaque scenery is batched by material and 480 m area for spatial culling, with simpler foliage beyond 700 m. A 4,500 m radius sphere encloses the enlarged landscape.
+
+`npm test` covers speed continuity, head/arm independence, calibrated coordinate agreement, 90°/180° turns at multiple frame rates, exact hover, boundary departure, arm geometry and world generation. `tests/preview.html` is a development-only scene/arm inspection page served by Vite; it is excluded from the production entrypoint.

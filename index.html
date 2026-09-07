@@ -46,24 +46,25 @@
 
       <aside class="controls-card glass-panel" aria-label="Meta Quest flight controls">
         <p class="eyebrow">Meta Quest: how to fly</p>
-        <div class="control-row"><kbd>1</kbd><span>Calibrate with A or X</span></div>
-        <div class="control-row"><kbd>ARMS OUT</kbd><span>Aim the controllers where you want to go</span></div>
-        <div class="control-row"><kbd>HANDS CLOSE</kbd><span>Go faster — together means bullet-fast</span></div>
+        <div class="control-row"><kbd>1</kbd><span>Arms at your sides, look ahead, press A or X</span></div>
+        <div class="control-row"><kbd>POINT</kbd><span>Your arms continuously set your flight direction</span></div>
+        <div class="control-row"><kbd>ONE ARM</kbd><span>Reach farther to go from slow to medium speed</span></div>
+        <div class="control-row"><kbd>TWO ARMS</kbd><span>Reach farther to go from slow to bullet-fast</span></div>
         <div class="control-row"><kbd>HANDS DOWN</kbd><span>Stop flying</span></div>
-        <div class="control-row"><kbd>HEAD TILT</kbd><span>Roll left or right</span></div>
-        <p class="controller-note">Your head is free to look around. Your extended controllers set the next piece of your flight path.</p>
+        <div class="control-row"><kbd>LOOK</kbd><span>Look around freely while your arms steer</span></div>
+        <p class="controller-note">Raise your arms a little to drift slowly. Raise and extend farther to accelerate. Rest both at your sides to hover.</p>
       </aside>
     </main>
 
     <section id="calibration" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card glass-panel">
         <p class="step">Before takeoff</p>
-        <h2>Find your neutral pose</h2>
+        <h2>Set your hover pose</h2>
         <p>
-          Lie face-down in a comfortable Superman pose. Look straight ahead and rest your
-          arms where they feel natural.
+          Get comfortable standing, seated, or lying in a Superman pose. Look ahead and
+          rest both arms at your sides. This records the pose that stops your flight.
         </p>
-        <button id="calibrate" class="primary" type="button">Set neutral posture</button>
+        <button id="calibrate" class="primary" type="button">Set hover posture</button>
         <p class="hint">Controller: press A or X · point your arms to steer · click thumbstick to pause</p>
       </div>
     </section>
@@ -73,7 +74,7 @@
         <p class="step">Flight paused</p>
         <h2>Take a breath</h2>
         <label class="toggle-row">
-          <span><strong>Comfort mode</strong><small>Slower flight and gentler turns</small></span>
+          <span><strong>Comfort mode</strong><small>Lower top speed with responsive arm steering</small></span>
           <input id="comfort-mode" type="checkbox" checked />
         </label>
         <label class="toggle-row">
