@@ -30,12 +30,15 @@ import { AdvancedDynamicTexture, Control, Rectangle, StackPanel, TextBlock } fro
 import { SkyWorld } from "./Course";
 import { FlightController, type FlightIntent, type XRControllerPose, type XRFlightIntent } from "./FlightController";
 import { PlayerArm } from "./PlayerArm";
+import { DesktopControls } from "./DesktopControls";
 import { getWorldNavigation, WORLD_REGIONS } from "./WorldNavigation";
 import type { GamePhase, GameSettings } from "./types";
 import type { AppUI } from "../ui/AppUI";
+import type { WebcamTracker } from "./webcam/WebcamTracker";
+import { WebcamControls } from "./webcam/WebcamControls";
 
 export class StarlightGame {
-  readonly settings: GameSettings = { comfortMode: true, vignette: true };
+  readonly settings: GameSettings = { comfortMode: true, vignette: true, rollMode: "assisted", fullRolls: true };
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly desktopCamera: UniversalCamera;
@@ -45,8 +48,7 @@ export class StarlightGame {
   private xr: WebXRDefaultExperience | null = null;
   private ui: AppUI | null = null;
   private phase: GamePhase = "landing";
-  private keys = new Set<string>();
-  private pointerIntent = { x: 0, y: 0 };
+  private readonly desktopControls = new DesktopControls();
   private lastFrameTime = performance.now();
   private activeGamepad: Gamepad | undefined;
   private xrFlightIntent: XRFlightIntent | undefined;
@@ -56,6 +58,14 @@ export class StarlightGame {
   private trackedPoses: XRControllerPose[] = [];
   private calibrationStep: "hover" | "reach" = "hover";
   private nextNavigationUpdate = 0;
+  private pauseAxisHeld = false;
+  private webcamTracker: WebcamTracker | null = null;
+  private readonly webcamControls = new WebcamControls();
+  private desktopInputMode: "keyboard" | "webcam" = "keyboard";
+  private webcamEmergencyHover = false;
+  private webcamCalibrationRun = 0;
+  private webcamCalibrationBusy = false;
+  private webcamAutoCalibrationPending = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true, powerPreference: "high-performance" });
@@ -75,6 +85,7 @@ export class StarlightGame {
     this.bindInput();
     this.engine.runRenderLoop(() => this.frame());
     window.addEventListener("resize", () => this.engine.resize());
+    window.addEventListener("pagehide", () => this.stopWebcamDiagnostic());
   }
 
   attachUI(ui: AppUI): void { this.ui = ui; }
@@ -130,20 +141,114 @@ export class StarlightGame {
 
   async enterVR(): Promise<void> {
     if (!this.xr) return;
+    this.ui?.setWebcamFlightMode(false);
+    this.stopWebcamDiagnostic();
     await this.xr.baseExperience.enterXRAsync("immersive-vr", "local-floor");
   }
 
+  async startWebcamDiagnostic(): Promise<void> {
+    if (this.isInXR() || !this.ui) return;
+    const video = this.ui.showWebcamDiagnostic();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.ui.setWebcamDiagnosticState("error", "This browser does not provide webcam access. Keyboard play remains available.");
+      return;
+    }
+    await this.startWebcamTracker(video);
+  }
+
+  stopWebcamDiagnostic(): void {
+    this.webcamTracker?.stop();
+    this.ui?.hideWebcamDiagnostic();
+  }
+
   startDesktop(): void {
+    void this.startHandTrackingDesktop();
+  }
+
+  startKeyboardDesktop(): void {
+    this.webcamAutoCalibrationPending = false;
+    this.desktopInputMode = "keyboard";
+    this.ui?.setWebcamFlightMode(false);
+    this.stopWebcamDiagnostic();
+    this.beginCalibration();
+  }
+
+  private async startHandTrackingDesktop(): Promise<void> {
+    if (this.isInXR() || !this.ui) return;
+    this.desktopInputMode = "webcam";
+    this.webcamControls.resetCalibration();
+    this.webcamEmergencyHover = false;
+    this.webcamAutoCalibrationPending = true;
+    this.ui.setWebcamFlightMode(true);
+    this.beginCalibration();
+    this.ui.setWebcamCalibrationBusy(true, "Waiting for camera tracking…");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.fallbackToKeyboard("This browser does not support webcam tracking. Starting keyboard controls.");
+      return;
+    }
+    await this.startWebcamTracker(this.ui.webcamSetupVideo());
+  }
+
+  private async startWebcamTracker(video: HTMLVideoElement): Promise<void> {
+    if (!this.ui) return;
+    if (!this.webcamTracker) {
+      const { WebcamTracker } = await import("./webcam/WebcamTracker");
+      this.webcamTracker = new WebcamTracker({
+        onState: (state, detail) => {
+          this.ui?.setWebcamDiagnosticState(state, detail);
+          if (!this.webcamAutoCalibrationPending) return;
+          if (state === "tracking") {
+            if (!this.webcamControls.hasHandsUpPose()) {
+              this.ui?.setCalibrationFeedback("Camera tracking is ready. Raise both open palms beside your shoulders to start calibration.");
+              return;
+            }
+            this.webcamAutoCalibrationPending = false;
+            void this.runHandsFreeWebcamCalibration();
+          } else if (state === "error") {
+            this.webcamAutoCalibrationPending = false;
+            this.fallbackToKeyboard(`${detail} Starting keyboard controls.`);
+          }
+        },
+        onSample: (sample) => {
+          this.webcamControls.addSample(sample);
+          this.ui?.updateWebcamDiagnostic(sample);
+        },
+      });
+    }
+    await this.webcamTracker.start(video);
+  }
+
+  private fallbackToKeyboard(message: string): void {
+    this.webcamAutoCalibrationPending = false;
+    this.desktopInputMode = "keyboard";
+    this.ui?.setWebcamFlightMode(false);
+    this.webcamTracker?.stop();
+    this.ui?.showToast(message);
+    this.beginCalibration();
+  }
+
+  startWebcamFlight(): void {
+    if (!this.webcamTracker) return;
+    this.desktopInputMode = "webcam";
+    this.webcamAutoCalibrationPending = false;
+    this.webcamControls.resetCalibration();
+    this.webcamEmergencyHover = false;
+    this.ui?.setWebcamFlightMode(true);
+    this.ui?.hideWebcamDiagnostic();
     this.beginCalibration();
   }
 
   calibrate(): void {
     if (this.phase !== "calibrating") return;
+    if (!this.isInXR() && this.desktopInputMode === "webcam") {
+      if (!this.webcamCalibrationBusy) void this.runHandsFreeWebcamCalibration();
+      return;
+    }
     if (this.isInXR() && this.calibrationStep === "hover") {
       this.flight.calibrateHover(this.trackedPoses);
       this.calibrationStep = "reach";
       this.ui?.setCalibrationStep("reach");
-      this.showVRPanel("SET YOUR FULL REACH", "Point one or both arms straight ahead at full extension, then press A or X. This sets exactly where full flight speed begins.");
+      this.showVRPanel("SET YOUR FULL REACH", "Extend both arms straight ahead, hands level, then press A or X. One arm also works. Tilt head and hands together to bank; hold a deeper tilt for one full roll.");
       return;
     }
     if (this.isInXR() && this.flight.calibrateFullReach(this.trackedPoses) === 0) {
@@ -151,12 +256,12 @@ export class StarlightGame {
       this.showVRPanel("FULL REACH NOT CAPTURED", "Point an arm straight ahead at full extension, then press A or X. Keep your arm clear of the rest position.");
       return;
     }
-    if (!this.isInXR()) this.flight.calibrateHover();
+    if (!this.isInXR() && this.desktopInputMode === "keyboard") this.flight.calibrateHover();
     this.hideVRPanel();
     this.phase = "flying";
     this.lastFrameTime = performance.now();
     this.ui?.setPhase(this.phase);
-    this.ui?.showToast(this.isInXR() ? "Reach calibrated — go anywhere" : "Neutral pose set — go anywhere");
+    this.ui?.showToast(this.isInXR() ? "Reach calibrated — go anywhere" : this.desktopInputMode === "webcam" ? "Webcam flight ready — raise your arms" : "Neutral pose set — go anywhere");
   }
 
   resume(): void {
@@ -170,6 +275,7 @@ export class StarlightGame {
   recalibrate(): void { this.beginCalibration(); }
 
   restart(): void {
+    this.desktopControls.reset();
     this.world.reset();
     this.flight.reset(this.world.startPosition, this.world.startDirection);
     this.beginCalibration();
@@ -181,19 +287,71 @@ export class StarlightGame {
   }
 
   private beginCalibration(): void {
+    this.webcamCalibrationRun++;
+    this.webcamCalibrationBusy = false;
+    this.desktopControls.clear();
     this.phase = "calibrating";
     this.calibrationStep = "hover";
     this.ui?.setPhase(this.phase);
     this.ui?.setCalibrationStep("hover");
+    if (!this.isInXR() && this.desktopInputMode === "webcam") this.ui?.setWebcamCalibrationStep("hover");
     this.showVRPanel("STEP 1: SET YOUR HOVER POSE", "Look ahead with both arms resting at your sides, then press A or X. Next, you will measure your fully extended reach.");
     if (document.pointerLockElement) document.exitPointerLock();
+  }
+
+  private async runHandsFreeWebcamCalibration(): Promise<void> {
+    if (!this.ui || this.webcamCalibrationBusy) return;
+    this.webcamCalibrationBusy = true;
+    const run = ++this.webcamCalibrationRun;
+    this.ui.setWebcamCalibrationBusy(true, "Capturing automatically…");
+    const wait = (milliseconds: number) => new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+    const active = () => run === this.webcamCalibrationRun && this.phase === "calibrating" && this.desktopInputMode === "webcam";
+    for (let count = 3; count >= 1; count--) {
+      this.ui.setCalibrationFeedback(`Open-palms hover capture in ${count}…`);
+      await wait(1000);
+      if (!active()) return;
+    }
+    if (!this.webcamControls.captureRest()) {
+      this.webcamCalibrationBusy = false;
+      this.ui.setCalibrationFeedback("Hover was not captured. Show both open palms beside your shoulders and keep your upper body visible.", "error");
+      this.ui.setWebcamCalibrationBusy(false, "Retry hands-free calibration");
+      return;
+    }
+    this.flight.calibrateHover();
+    this.calibrationStep = "reach";
+    this.ui.setWebcamCalibrationStep("reach");
+    this.ui.setCalibrationFeedback("✓ Hands-up hover captured. Close both hands into fists and extend your arms toward the screen.");
+    await wait(1400);
+    if (!active()) return;
+
+    while (active()) {
+      for (let count = 3; count >= 1; count--) {
+        this.ui.setCalibrationFeedback(`✓ Hover captured · Fists-forward reach capture in ${count}…`);
+        await wait(1000);
+        if (!active()) return;
+      }
+      if (this.webcamControls.captureReach()) break;
+      this.ui.setCalibrationFeedback(`${this.webcamControls.getCalibrationIssue()} Retrying automatically…`, "error");
+      await wait(1500);
+    }
+    if (!active()) return;
+    this.ui.setCalibrationFeedback("✓ Hover captured · ✓ Full reach captured · Starting flight…");
+    await wait(900);
+    if (!active()) return;
+    this.webcamCalibrationBusy = false;
+    this.hideVRPanel();
+    this.phase = "flying";
+    this.lastFrameTime = performance.now();
+    this.ui.setPhase(this.phase);
+    this.ui.showToast("Webcam flight ready — fists fly, an open palm hovers");
   }
 
   private pauseGame(): void {
     if (this.phase !== "flying") return;
     this.phase = "paused";
+    this.desktopControls.clear();
     this.ui?.setPhase(this.phase);
-    this.showVRPanel("FLIGHT PAUSED", "Click the thumbstick to resume. B or Y recalibrates.");
+    this.showVRPausePanel();
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -207,7 +365,8 @@ export class StarlightGame {
     // A/X may just have calibrated the body pose used by this frame's controls.
     if (this.isInXR()) this.xrFlightIntent = this.flight.createXRIntent(this.trackedPoses);
     if (this.phase === "flying") {
-      const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(), this.activeGamepad, this.xrFlightIntent);
+      const gamepad = this.desktopInputMode === "keyboard" ? this.activeGamepad : undefined;
+      const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(deltaSeconds), gamepad, this.xrFlightIntent);
       this.world.update(now / 1000);
       this.ui?.updateFlight(telemetry);
       if (!this.isInXR()) {
@@ -228,19 +387,12 @@ export class StarlightGame {
       this.ui?.setVignette(0);
     }
 
-    this.pointerIntent.x *= Math.exp(-deltaSeconds * 4.2);
-    this.pointerIntent.y *= Math.exp(-deltaSeconds * 4.2);
     this.scene.render();
   }
 
-  private readDesktopIntent(): FlightIntent {
-    const pressed = (...codes: string[]) => codes.some((code) => this.keys.has(code));
-    return {
-      throttle: pressed("ArrowUp", "ShiftLeft", "ShiftRight", "Space") ? 1 : 0,
-      brake: pressed("ArrowDown", "ControlLeft", "ControlRight") ? 1 : 0,
-      yaw: Math.max(-1, Math.min(1, (pressed("KeyD", "ArrowRight") ? 1 : 0) - (pressed("KeyA", "ArrowLeft") ? 1 : 0) + this.pointerIntent.x)),
-      pitch: Math.max(-1, Math.min(1, (pressed("KeyS") ? 1 : 0) - (pressed("KeyW") ? 1 : 0) + this.pointerIntent.y)),
-    };
+  private readDesktopIntent(dt: number): FlightIntent {
+    if (this.desktopInputMode === "webcam") return this.webcamControls.read(performance.now(), Math.min(dt, 0.05), this.webcamEmergencyHover);
+    return this.desktopControls.read(Math.min(dt, 0.05));
   }
 
   private readXRControllers(): void {
@@ -266,6 +418,13 @@ export class StarlightGame {
     if (this.phase === "calibrating" && calibrate) this.calibrate();
     else if (this.phase === "paused" && recalibrate) this.recalibrate();
     else if (pause) this.togglePause();
+    else if (this.phase === "paused" && this.isInXR()) {
+      const x = gamepads.map((pad) => pad.axes[2] ?? pad.axes[0] ?? 0).find((axis) => Math.abs(axis) > 0.65) ?? 0;
+      if (x && !this.pauseAxisHeld) this.settings.rollMode = x < 0 ? "assisted" : "free";
+      if (calibrate) this.settings.fullRolls = !this.settings.fullRolls;
+      if ((x && !this.pauseAxisHeld) || calibrate) { this.ui?.setPhase("paused"); this.showVRPausePanel(); }
+      this.pauseAxisHeld = x !== 0;
+    } else this.pauseAxisHeld = false;
   }
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
@@ -301,19 +460,28 @@ export class StarlightGame {
   private bindInput(): void {
     window.addEventListener("keydown", (event) => {
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) event.preventDefault();
-      this.keys.add(event.code);
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+      if (this.phase === "flying" && !this.isInXR() && this.desktopInputMode === "keyboard") this.desktopControls.keyDown(event.code, performance.now(), event.repeat);
+      if (this.phase === "flying" && !this.isInXR() && this.desktopInputMode === "webcam" && event.code === "Space") this.webcamEmergencyHover = true;
+      if (event.repeat) return;
       if (event.code === "Escape") this.togglePause();
       if (event.code === "KeyR" && (this.phase === "flying" || this.phase === "paused")) this.recalibrate();
       if (event.code === "Enter" && this.phase === "calibrating") this.calibrate();
     });
-    window.addEventListener("keyup", (event) => this.keys.delete(event.code));
+    window.addEventListener("keyup", (event) => {
+      this.desktopControls.keyUp(event.code);
+      if (event.code === "Space") this.webcamEmergencyHover = false;
+    });
+    window.addEventListener("blur", () => { this.desktopControls.clear(); if (!this.isInXR()) this.pauseGame(); });
+    document.addEventListener("pointerlockchange", () => {
+      if (!document.pointerLockElement && !this.isInXR() && this.desktopInputMode === "keyboard") { this.desktopControls.clear(); this.pauseGame(); }
+    });
     window.addEventListener("mousemove", (event) => {
-      if (document.pointerLockElement !== this.canvas || this.phase !== "flying") return;
-      this.pointerIntent.x = Math.max(-1, Math.min(1, this.pointerIntent.x + event.movementX * 0.0025));
-      this.pointerIntent.y = Math.max(-1, Math.min(1, this.pointerIntent.y + event.movementY * 0.0025));
+      if (this.desktopInputMode !== "keyboard" || document.pointerLockElement !== this.canvas || this.phase !== "flying") return;
+      this.desktopControls.mouseMove(event.movementX, event.movementY);
     });
     this.canvas.addEventListener("click", () => {
-      if (this.phase === "flying" && !this.isInXR()) this.canvas.requestPointerLock?.();
+      if (this.phase === "flying" && !this.isInXR() && this.desktopInputMode === "keyboard") this.canvas.requestPointerLock?.();
     });
   }
 
@@ -429,6 +597,10 @@ export class StarlightGame {
     description.height = "180px";
     stack.addControl(description);
     this.vrPanel = panel;
+  }
+
+  private showVRPausePanel(): void {
+    this.showVRPanel("FLIGHT PAUSED", `Roll: ${this.settings.rollMode === "free" ? "Free" : "Assisted"}. Full rolls: ${this.settings.fullRolls ? "ON" : "OFF"}. Stick left/right selects Assisted/Free; A or X toggles full rolls. Click stick to resume. B or Y recalibrates.`);
   }
 
   private hideVRPanel(): void {

@@ -27,6 +27,7 @@ function view(position: Vector3) {
   input('head').value = '0';
   input('pitch').value = '20';
   input('heading').value = '0';
+  input('tilt').value = '0';
   input('fly').checked = false;
 }
 document.getElementById('city')!.onclick = () => view(new Vector3(0, 75, -180));
@@ -37,6 +38,14 @@ document.getElementById('connection')!.onclick = () => {
   game.flight.calibrate();
 };
 document.getElementById('arms')!.onclick = () => view(new Vector3(0, 180, -250));
+const bank = (tilt: number, offset: number) => {
+  input('tilt').value = String(tilt);
+  input('left').value = String(90 + offset); input('right').value = String(90 - offset);
+};
+document.getElementById('bank-right')!.onclick = () => bank(14, 7);
+document.getElementById('roll-right')!.onclick = () => bank(28, 12);
+document.getElementById('neutral-roll')!.onclick = () => bank(0, 0);
+document.getElementById('hover')!.onclick = () => { bank(0, 0); input('left').value = input('right').value = '0'; };
 let lastStats = 0;
 game.scene.onBeforeRenderObservable.add(() => {
   const yaw = Number(input('heading').value) * Math.PI / 180;
@@ -52,14 +61,16 @@ game.scene.onBeforeRenderObservable.add(() => {
     return {position, handedness: side};
   });
   camera.rotationQuaternion = input('desktop').checked && input('fly').checked ? Quaternion.Identity()
-    : Quaternion.FromEulerAngles(Number(input('pitch').value) * Math.PI / 180, Number(input('head').value) * Math.PI / 180, 0);
+    : Quaternion.FromEulerAngles(Number(input('pitch').value) * Math.PI / 180, Number(input('head').value) * Math.PI / 180, -Number(input('tilt').value) * Math.PI / 180);
   const intent = game.flight.createXRIntent(poses);
   game.settings.comfortMode = input('comfort').checked;
+  game.settings.rollMode = input('roll').value === 'free' ? 'free' : 'assisted';
+  game.settings.fullRolls = input('full-rolls').checked;
   const desktop = input('desktop').checked;
   const telemetry = input('fly').checked ? game.flight.update(game.engine.getDeltaTime() / 1000,
     {throttle: desktop ? 1 : 0, brake: input('brake').checked ? 1 : 0, yaw:0, pitch:0}, undefined, desktop ? undefined : intent) : null;
   if (performance.now() - lastStats > 250) {
-    document.getElementById('stats')!.textContent = `${telemetry ? `${(telemetry.speed * 3.6).toFixed(0)} km/h · ` : ''}Thrust: ${(intent.throttle * 100).toFixed(1)}% · Heading: ${intent.direction.asArray().map((x) => x.toFixed(2)).join(', ')} · ${game.engine.getFps().toFixed(0)} FPS · ${game.scene.getActiveMeshes().length} active meshes`;
+    document.getElementById('stats')!.textContent = `${telemetry ? `${(telemetry.speed * 3.6).toFixed(0)} km/h · ` : ''}Thrust: ${(intent.throttle * 100).toFixed(1)}% · Roll gesture: ${((intent.roll ?? 0) * 100).toFixed(0)}% · Heading: ${intent.direction.asArray().map((x) => x.toFixed(2)).join(', ')} · ${game.engine.getFps().toFixed(0)} FPS · ${game.scene.getActiveMeshes().length} active meshes`;
     lastStats = performance.now();
   }
 });

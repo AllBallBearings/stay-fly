@@ -7,19 +7,19 @@
     <link rel="icon" href="./favicon.svg" />
     <meta
       name="description"
-      content="I Gotta Stay Fly — a ridiculous, comfort-first WebXR flying game for Meta Quest."
+      content="Stay Fly — a ridiculous, comfort-first WebXR flying game for Meta Quest."
     />
-    <title>I Gotta Stay Fly</title>
+    <title>Stay Fly</title>
   </head>
   <body>
-    <canvas id="game-canvas" aria-label="I Gotta Stay Fly 3D game"></canvas>
+    <canvas id="game-canvas" aria-label="Stay Fly 3D game"></canvas>
 
     <div id="vignette" aria-hidden="true"></div>
 
     <main id="landing" class="screen">
       <section class="hero glass-panel">
         <p class="eyebrow">Rule number one</p>
-        <h1>I Gotta<br /><span>Stay Fly</span></h1>
+        <h1>Stay<br /><span>Fly</span></h1>
         <p class="intro">
           Fly wherever you want. Cruise past waterfalls, skyscrapers, and quiet islands in the clouds.
         </p>
@@ -29,12 +29,19 @@
             <span>Enter VR</span><small>Meta Quest</small>
           </button>
           <button id="play-desktop" class="secondary" type="button">
-            Play on desktop
+            Use hand tracking
+          </button>
+          <button id="play-keyboard" class="text-button" type="button">
+            Keyboard / mouse
+          </button>
+          <button id="test-webcam" class="secondary" type="button">
+            Test webcam tracking
           </button>
         </div>
 
         <p id="xr-status" class="status">Checking WebXR support…</p>
-        <p class="desktop-guide">Desktop: hold Shift, Space or ↑ for top speed. Ctrl or ↓ brakes. A/D turns; W/S climbs/dives.</p>
+        <p class="desktop-guide">Desktop: mouse or arrows steer (↑ climbs). W/S adjusts speed; Shift boosts; Space hovers. Hold Q/E to bank, double-tap to roll. Hold Alt + mouse to look around. Click the scene to capture the mouse.</p>
+        <p class="privacy-note">Hand tracking uses your camera locally, with no audio, recording or uploads. A live tracking preview stays in the corner while you fly.</p>
         <p class="world-guide">One connected world: city ahead, forest to the right, waterfalls to the left, harbor beyond the city. Fly toward the district signs—no map switching.</p>
 
         <div class="safety-note">
@@ -49,23 +56,52 @@
       <aside class="controls-card glass-panel" aria-label="Meta Quest flight controls">
         <p class="eyebrow">Meta Quest: how to fly</p>
         <div class="control-row"><kbd>1</kbd><span>Arms at your sides, look ahead, press A or X to set hover</span></div>
-        <div class="control-row"><kbd>2</kbd><span>Point an arm fully forward, then press A or X to set your real reach</span></div>
+        <div class="control-row"><kbd>2</kbd><span>Extend arms forward with hands level; press A or X to set reach</span></div>
         <div class="control-row"><kbd>POINT</kbd><span>Your arms continuously set your flight direction</span></div>
         <div class="control-row"><kbd>ONE ARM</kbd><span>Reach farther to go from slow to medium speed</span></div>
         <div class="control-row"><kbd>TWO ARMS</kbd><span>Reach farther to go from slow to bullet-fast</span></div>
         <div class="control-row"><kbd>HANDS DOWN</kbd><span>Stop flying</span></div>
         <div class="control-row"><kbd>LOOK</kbd><span>Look around freely while your arms steer</span></div>
+        <div class="control-row"><kbd>BANK</kbd><span>Tilt head right, right hand lower / left higher; reverse for left</span></div>
+        <div class="control-row"><kbd>ROLL</kbd><span>Hold a deeper matching tilt briefly for one full roll; relax to rearm</span></div>
         <p class="controller-note">Raise your arms a little to drift slowly. Raise and extend farther to accelerate. Rest both at your sides to hover.</p>
       </aside>
     </main>
+
+    <section id="webcam-diagnostic" class="webcam-diagnostic hidden" role="dialog" aria-modal="true" aria-labelledby="webcam-title">
+      <div class="webcam-card glass-panel">
+        <div class="webcam-copy">
+          <p class="step">Experimental desktop controls</p>
+          <h2 id="webcam-title">Webcam tracking check</h2>
+          <p id="webcam-status" role="status">Camera is off.</p>
+          <div id="webcam-metrics" class="webcam-metrics" aria-live="polite">
+            <span>Pose: —</span><span>Face: —</span><span>Hands: —</span><span>Inference: —</span>
+            <span>Left reach: —</span><span>Right reach: —</span><span>Head bank: —</span>
+          </div>
+          <p class="webcam-instructions">Sit far enough back to show your head, shoulders, elbows, wrists and fingers. First show both open palms beside your shoulders; then try closed fists with fully extended arms. When tracking is stable, choose “Use webcam to fly” for an automatic two-pose calibration.</p>
+          <div class="modal-actions">
+            <button id="start-webcam-flight" class="primary" type="button" disabled>Use webcam to fly</button>
+            <button id="restart-webcam" class="primary" type="button">Retry camera</button>
+            <button id="stop-webcam" class="secondary" type="button">Stop camera</button>
+          </div>
+        </div>
+        <div id="webcam-stage" class="webcam-stage">
+          <video id="webcam-video" muted playsinline></video>
+          <canvas id="webcam-overlay" aria-hidden="true"></canvas>
+          <span class="local-only">LOCAL PROCESSING · NO AUDIO</span>
+        </div>
+      </div>
+    </section>
 
     <section id="calibration" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-card glass-panel">
         <p id="calibration-step" class="step">Step 1 of 2 · Before takeoff</p>
         <h2 id="calibration-title">Set your hover pose</h2>
         <p id="calibration-description">Look ahead and rest both arms at your sides. This records the pose that stops your flight.</p>
+        <div id="webcam-calibration-slot" class="webcam-calibration-slot hidden"></div>
+        <p id="calibration-feedback" class="calibration-feedback" role="status"></p>
         <button id="calibrate" class="primary" type="button">Set hover posture</button>
-        <p class="hint">Controller: press A or X for each step · point your arms to steer · click thumbstick to pause</p>
+        <p id="calibration-hint" class="hint">Controller: press A or X for each step · point your arms to steer · click thumbstick to pause</p>
       </div>
     </section>
 
@@ -80,6 +116,14 @@
         <label class="toggle-row">
           <span><strong>Dynamic vignette</strong><small>Narrows view during motion</small></span>
           <input id="vignette-toggle" type="checkbox" checked />
+        </label>
+        <label class="toggle-row">
+          <span><strong>Roll style</strong><small>Assisted levels out; Free keeps rolling while held</small></span>
+          <select id="roll-mode"><option value="assisted">Assisted</option><option value="free">Free Roll</option></select>
+        </label>
+        <label class="toggle-row">
+          <span><strong>Allow full rolls</strong><small>Turn off for bank-only flight in either style</small></span>
+          <input id="full-rolls" type="checkbox" checked />
         </label>
         <div class="modal-actions">
           <button id="resume" class="primary" type="button">Resume</button>
@@ -96,6 +140,7 @@
         <div class="speed-track"><i id="speed-fill"></i></div>
       </div>
       <small class="pause-hint">Esc · pause</small>
+      <small id="webcam-flight-status" class="webcam-flight-status hidden">● Webcam tracking</small>
       <div class="world-navigation"><span id="region-directions"></span><small>Arrows point relative to your view · fly between districts</small></div>
     </header>
 

@@ -9,6 +9,11 @@ import { PlayerArm } from '../src/game/PlayerArm';
 import { SkyWorld } from '../src/game/Course';
 import { getWorldNavigation, REGION_CONNECTIONS, WORLD_REGIONS } from '../src/game/WorldNavigation';
 import { terrainDisk, terrainHeight, terrainStrip } from '../src/game/Terrain';
+import { combinedRoll, handBankAngle, headBankAngle } from '../src/game/VRRoll';
+import { RollController } from '../src/game/RollController';
+import { DesktopControls } from '../src/game/DesktopControls';
+import { WebcamControls } from '../src/game/webcam/WebcamControls';
+import type { TrackingSample } from '../src/game/webcam/types';
 
 const engine = new NullEngine();
 const neutral = { throttle: 0, brake: 0, yaw: 0, pitch: 0 };
@@ -20,13 +25,13 @@ function check(name: string, fn: () => void) {
   passed++;
   console.log(`PASS ${name}`);
 }
-function setup(head = Quaternion.Identity(), start = Vector3.Forward()) {
+function setup(head = Quaternion.Identity(), start = Vector3.Forward(), rollMode: 'assisted' | 'free' = 'assisted') {
   const scene = new Scene(engine);
   const rig = new TransformNode('rig', scene);
   const camera = new UniversalCamera('camera', new Vector3(0, 1.65, 0), scene);
   camera.parent = rig;
   camera.rotationQuaternion = head;
-  const flight = new FlightController(rig, camera, { comfortMode: false, vignette: true }, {center: Vector3.Zero(), radius: 4500});
+  const flight = new FlightController(rig, camera, { comfortMode: false, vignette: true, rollMode }, {center: Vector3.Zero(), radius: 4500});
   flight.reset(new Vector3(0, 100, 0), start);
   flight.calibrate();
   function pose(side: 'left' | 'right', direction: Vector3, length = 0.65): XRControllerPose {
@@ -48,12 +53,85 @@ check('desktop reaches high speed quickly in both modes and brakes without chang
     assert.ok(Math.abs(telemetry.speed - max) < 0.1);
     for (let i = 0; i < fps; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 1, brake: 1});
     assert.ok(telemetry.speed < 3, `weak brakes: ${telemetry.speed}`);
-    for (let i = 0; i < fps * 3; i++) telemetry = flight.update(1 / fps, neutral);
-    assert.ok(Math.abs(telemetry.speed - (comfortMode ? 22 : 32)) < 0.1);
+    for (let i = 0; i < fps * 3; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 0.2});
+    assert.ok(Math.abs(telemetry.speed - max * 0.2) < 0.1);
     for (let i = 0; i < fps * 2; i++) telemetry = flight.update(1 / fps, neutral, undefined, {active:true, throttle:1, direction:Vector3.Forward()});
     assert.ok(Math.abs(telemetry.speed - (comfortMode ? 42 : 60)) < 0.01);
     scene.dispose();
   }
+});
+check('webcam calibration maps rest, one/two-arm thrust, right turns, climbs and stale safety hover', () => {
+  const controls = new WebcamControls();
+  const sample = (time: number, options: {lift?: number; leftLift?: number; rightLift?: number; shiftX?: number; open?: boolean; uncertain?: boolean; handScale?: number; flatWorld?: boolean} = {}): TrackingSample => {
+    const image = Array.from({length: 33}, () => ({x: .5, y: .5, z: 0, visibility: 1}));
+    const world = Array.from({length: 33}, () => ({x: 0, y: 0, z: 0, visibility: 1}));
+    image[11].x = .64; image[12].x = .36;
+    const leftLift = options.leftLift ?? options.lift ?? 0;
+    const rightLift = options.rightLift ?? options.lift ?? 0;
+    image[15] = {x: .58 + (options.shiftX ?? 0), y: .85 - .35 * leftLift, z: 0, visibility: 1};
+    image[16] = {x: .42 + (options.shiftX ?? 0), y: .85 - .35 * rightLift, z: 0, visibility: 1};
+    world[11].x = -.18; world[12].x = .18;
+    world[15] = {x: -.18, y: 0, z: -(options.flatWorld ? .15 : .15 + .5 * leftLift), visibility: 1};
+    world[16] = {x: .18, y: 0, z: -(options.flatWorld ? .15 : .15 + .5 * rightLift), visibility: 1};
+    const hand = (x: number, y: number) => {
+      const scale = options.handScale ?? 1;
+      const points = Array.from({length: 21}, () => ({x, y, z: 0}));
+      for (const [finger, dx] of [[5,-.06],[9,-.02],[13,.02],[17,.06]] as const) {
+        points[finger] = {x:x + dx * scale, y:y - .02 * scale, z:0};
+        points[finger + 1] = {x:x + dx * scale, y:y - .07 * scale, z:0};
+        points[finger + 2] = {x:x + dx * scale, y:y - .10 * scale, z:0};
+        const tip = finger + 3;
+        const extended = options.open || (options.uncertain && finger <= 9);
+        points[tip] = extended ? {x:x + dx * 1.25 * scale, y:y - .18 * scale, z:0} : {x:x + dx * .25 * scale, y:y - .025 * scale, z:0};
+      }
+      return {landmarks: points};
+    };
+    return {generation: 1, frameId: time, capturedAtMs: time, inferenceMs: 35, pose: {image, world}, face: {matrix: [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1], landmarks: []}, hands: [hand(image[15].x, image[15].y), hand(image[16].x, image[16].y)]};
+  };
+  for (let i = 0; i < 8; i++) controls.addSample(sample(500 + i * 50, {open: true}));
+  assert.ok(controls.captureRest(900));
+  for (let i = 0; i < 8; i++) controls.addSample(sample(1000 + i * 50, {lift: 1, uncertain: true}));
+  assert.ok(controls.captureReach(1400));
+  controls.addSample(sample(1450));
+  assert.equal(controls.read(1450, 1 / 60).hover, true);
+  let intent = controls.read(1450, 1 / 60);
+  for (let i = 0; i < 30; i++) {
+    controls.addSample(sample(1500 + i, {lift: 1}));
+    intent = controls.read(1500 + i, 1 / 60);
+  }
+  assert.ok(intent.throttle > .95 && intent.throttle <= 1);
+  controls.addSample(sample(1550, {lift: 1, open: true}));
+  assert.equal(controls.read(1550, 1 / 60).hover, true, "an open palm must stop flight immediately");
+  controls.addSample(sample(1600, {leftLift: 1, rightLift: 0}));
+  for (let i = 0; i < 30; i++) intent = controls.read(1600, 1 / 60);
+  assert.ok(intent.throttle <= .51);
+  controls.addSample(sample(1700, {lift: 1, shiftX: -.18}));
+  for (let i = 0; i < 30; i++) intent = controls.read(1700, 1 / 60);
+  assert.ok(intent.yaw > .5, `right turn ${intent.yaw}`);
+  controls.addSample(sample(1800, {lift: 1}));
+  const climbing = sample(1810, {lift: 1}); climbing.pose!.image[15].y -= .15; climbing.pose!.image[16].y -= .15;
+  controls.addSample(climbing);
+  for (let i = 0; i < 30; i++) intent = controls.read(1810, 1 / 60);
+  assert.ok(intent.pitch < -.3, `climb ${intent.pitch}`);
+  assert.equal(controls.read(2200, 1 / 60).hover, true);
+
+  const depthControls = new WebcamControls();
+  for (let i = 0; i < 8; i++) depthControls.addSample(sample(3000 + i * 50, {open: true, flatWorld: true}));
+  assert.ok(depthControls.captureRest(3400));
+  for (let i = 0; i < 8; i++) depthControls.addSample(sample(3500 + i * 50, {lift: 1, uncertain: true, flatWorld: true, handScale: 1.7}));
+  assert.ok(depthControls.captureReach(3900), depthControls.getCalibrationIssue());
+  for (let i = 0; i < 30; i++) {
+    depthControls.addSample(sample(4000 + i, {lift: 1, flatWorld: true, handScale: 1.7}));
+    intent = depthControls.read(4000 + i, 1 / 60);
+  }
+  assert.ok(intent.throttle > .95, `foreshortened arm depth throttle ${intent.throttle}`);
+});
+check('webcam exact hover clears desktop speed and steering immediately', () => {
+  const {scene, flight} = setup();
+  for (let i = 0; i < 60; i++) flight.update(1 / 60, {...neutral, throttle: 1, yaw: 1});
+  const telemetry = flight.update(1 / 60, {...neutral, hover: true});
+  near(telemetry.speed, 0);
+  scene.dispose();
 });
 check('district navigation follows the viewing heading and all regions share a connected route network', () => {
   const city = WORLD_REGIONS[0];
@@ -176,6 +254,128 @@ check('hands down and tracking loss stop exactly, with no altitude drift at 300 
   }
   near(Vector3.Distance(position, rig.position), 0);
 });
+check('roll requires matching head and hand tilt, with a quiet neutral deadzone', () => {
+  const {flight, camera, pose} = setup();
+  const forward = [pose('left', Vector3.Forward()), pose('right', Vector3.Forward())];
+  const bank = (sign: number) => [pose('left', new Vector3(0, sign * 0.2, 1)), pose('right', new Vector3(0, -sign * 0.2, 1))];
+  for (const sign of [-1, 1]) {
+    camera.rotationQuaternion = Quaternion.Identity();
+    near(flight.createXRIntent(bank(sign)).roll ?? 0, 0);
+    camera.rotationQuaternion = Quaternion.FromEulerAngles(0, 0, -sign * Math.PI / 7);
+    near(flight.createXRIntent(forward).roll ?? 0, 0);
+    const intent = flight.createXRIntent(bank(sign));
+    assert.ok((intent.roll ?? 0) * sign > 0.8);
+    near(flight.createXRIntent(bank(-sign)).roll ?? 0, 0);
+    near(flight.createXRIntent([bank(sign)[0]]).roll ?? 0, 0);
+    near(flight.createXRIntent([pose('left', Vector3.Down()), pose('right', Vector3.Down())]).roll ?? 0, 0);
+  }
+  near(combinedRoll(0.04, 0.4), 0);
+  near(combinedRoll(0.4, 0.07), 0);
+});
+check('head roll excludes looking up, down or sideways and works in calibrated prone space', () => {
+  for (const neutralHead of [Quaternion.Identity(), Quaternion.FromEulerAngles(Math.PI / 2, 0.5, 0.2)]) {
+    for (const yaw of [-2, -0.5, 0, 1.5]) for (const pitch of [-0.7, 0, 0.7]) {
+      const head = neutralHead.multiply(Quaternion.FromEulerAngles(pitch, yaw, 0));
+      near(headBankAngle(head, neutralHead), 0);
+      const banked = neutralHead.multiply(Quaternion.FromEulerAngles(pitch, yaw, -0.3));
+      near(headBankAngle(banked, neutralHead), 0.3);
+    }
+    const left = new Vector3(-0.18, 0.1, 0.65);
+    const right = new Vector3(0.18, -0.1, 0.65);
+    left.rotateByQuaternionToRef(neutralHead, left);
+    right.rotateByQuaternionToRef(neutralHead, right);
+    assert.ok(handBankAngle(left, right, neutralHead) > 0.5);
+  }
+  near(headBankAngle(Quaternion.FromEulerAngles(Math.PI / 2, 0, -0.3), Quaternion.Identity()), 0);
+});
+check('full-reach calibration accounts for a natural difference in hand heights', () => {
+  const {flight, camera, pose} = setup();
+  const neutralHands = [pose('left', new Vector3(0, 0.06, 1)), pose('right', new Vector3(0, -0.06, 1))];
+  assert.equal(flight.calibrateFullReach(neutralHands), 2);
+  camera.rotationQuaternion = Quaternion.FromEulerAngles(0, 0, -0.4);
+  near(flight.createXRIntent(neutralHands).roll ?? 0, 0);
+  assert.ok((flight.createXRIntent([pose('left', new Vector3(0, 0.25, 1)), pose('right', new Vector3(0, -0.25, 1))]).roll ?? 0) > 0.5);
+});
+const worldHead = (rig: TransformNode, camera: UniversalCamera) => {
+  const position = Vector3.Zero();
+  camera.position.rotateByQuaternionToRef(rig.rotationQuaternion!, position);
+  return position.addInPlace(rig.position);
+};
+check('full rolls preserve arm heading, rotate the correct way and pivot at the headset at 72/90/120 Hz', () => {
+  for (const fps of [72, 90, 120]) for (const sign of [-1, 1]) {
+    const {flight, rig, camera, pose, scene} = setup(Quaternion.Identity(), Vector3.Forward(), 'free');
+    const arms = [pose('left', new Vector3(0, sign * 0.2, 1)), pose('right', new Vector3(0, -sign * 0.2, 1))];
+    const initialHeading = flight.createXRIntent(arms).direction;
+    for (let i = 0; i < fps; i++) flight.update(1 / fps, neutral, undefined, flight.createXRIntent(arms));
+    camera.rotationQuaternion = Quaternion.FromEulerAngles(0, 0, -sign * Math.PI / 7);
+    let totalAngle = 0;
+    for (let i = 0; i < fps * 6; i++) {
+      const before = worldHead(rig, camera);
+      const rotation = rig.rotationQuaternion!.clone();
+      const intent = flight.createXRIntent(arms);
+      aligned(intent.direction, initialHeading);
+      const telemetry = flight.update(1 / fps, neutral, undefined, intent);
+      const movement = worldHead(rig, camera).subtract(before);
+      aligned(movement, initialHeading);
+      near(movement.length(), telemetry.speed / fps);
+      near(rig.rotationQuaternion!.length(), 1);
+      totalAngle += 2 * Math.acos(Math.min(1, Math.abs(Quaternion.Dot(rotation, rig.rotationQuaternion!))));
+      if (i === Math.floor(fps / 2)) {
+        const up = Vector3.Up();
+        up.rotateByQuaternionToRef(rig.rotationQuaternion!, up);
+        assert.ok(up.x * sign > 0.3, 'right roll must tilt the body to the right');
+      }
+    }
+    assert.ok(totalAngle > Math.PI * 2, 'must complete a full roll without clamping or flipping');
+    const banked = rig.rotationQuaternion!.clone();
+    camera.rotationQuaternion = Quaternion.Identity();
+    flight.update(1 / fps, neutral, undefined, flight.createXRIntent(arms));
+    near(Quaternion.Dot(banked, rig.rotationQuaternion!), 1);
+    const stopped = worldHead(rig, camera);
+    flight.update(1 / fps, neutral, undefined, flight.createXRIntent([]));
+    near(Vector3.Distance(stopped, worldHead(rig, camera)), 0);
+    assert.ok(Math.abs(Quaternion.Dot(banked, rig.rotationQuaternion!)) > 0.999, 'hover recovery must be gradual');
+    scene.dispose();
+  }
+});
+check('pointing changes remain direct and responsive while the body is rolled', () => {
+  const {flight, rig, camera, pose} = setup();
+  for (let i = 0; i < 90; i++) flight.update(1 / 90, neutral, undefined, {active: true, throttle: 1, direction: Vector3.Forward(), roll: 1});
+  for (const worldDirection of [new Vector3(0, 0.5, 1), new Vector3(0, -0.5, 1), Vector3.Right(), new Vector3(0, 0, -1)]) {
+    const local = Vector3.Zero();
+    worldDirection.normalize().rotateByQuaternionToRef(rig.rotationQuaternion!.conjugate(), local);
+    const arms = [pose('left', local), pose('right', local)];
+    const intent = flight.createXRIntent(arms);
+    aligned(intent.direction, worldDirection);
+    let movement = Vector3.Zero();
+    for (let i = 0; i < 18; i++) {
+      const before = worldHead(rig, camera);
+      flight.update(1 / 90, neutral, undefined, intent);
+      movement = worldHead(rig, camera).subtract(before);
+    }
+    assert.ok(Vector3.Dot(movement.normalizeToNew(), worldDirection) > 0.999);
+  }
+});
+check('comfort limits roll to 45 degrees/second versus 90 and recalibration does not snap the view', () => {
+  for (const comfortMode of [true, false]) {
+    const {rig, camera, scene} = setup();
+    const flight = new FlightController(rig, camera, {comfortMode, vignette: true, rollMode: 'free'});
+    flight.calibrate();
+    const intent = {active: true, throttle: 1, direction: Vector3.Forward(), roll: 1};
+    for (let i = 0; i < 180; i++) flight.update(1 / 90, neutral, undefined, intent);
+    const before = rig.rotationQuaternion!.clone();
+    flight.update(1 / 90, neutral, undefined, intent);
+    const angle = 2 * Math.acos(Math.min(1, Quaternion.Dot(before, rig.rotationQuaternion!)));
+    near(angle * 90, comfortMode ? Math.PI / 4 : Math.PI / 2);
+    const banked = rig.rotationQuaternion!.clone();
+    flight.calibrateHover();
+    near(Quaternion.Dot(banked, rig.rotationQuaternion!), 1);
+    flight.reset(new Vector3(0, 100, 0), Vector3.Forward());
+    flight.update(1 / 90, neutral, undefined, {...intent, roll: 0});
+    near(Quaternion.Dot(Quaternion.Identity(), rig.rotationQuaternion!), 1);
+    scene.dispose();
+  }
+});
 check('boundary contains motion and allows immediate inward departure', () => {
   const {flight, rig, pose} = setup();
   rig.position.set(4499, 0, 0);
@@ -183,6 +383,118 @@ check('boundary contains motion and allows immediate inward departure', () => {
   assert.ok(rig.position.length() <= 4500.00001);
   for (let i = 0; i < 90; i++) flight.update(1 / 90, neutral, undefined, flight.createXRIntent([pose('left', Vector3.Left())]));
   assert.ok(rig.position.length() < 4480);
+});
+check('assisted banking holds an angle, returns level and never becomes a spin near vertical', () => {
+  for (const fps of [72, 90, 120]) for (const axis of [Vector3.Forward(), Vector3.Up()]) {
+    const {flight, rig} = setup();
+    const intent = {active: true, throttle: 0.5, direction: axis, roll: 0.5};
+    for (let i = 0; i < fps * 3; i++) flight.update(1 / fps, neutral, undefined, intent);
+    const banked = rig.rotationQuaternion!.clone();
+    const angle = 2 * Math.acos(Math.min(1, Math.abs(Quaternion.Dot(banked, Quaternion.Identity()))));
+    near(angle, 17.5 * Math.PI / 180, 0.001);
+    for (let i = 0; i < fps * 3; i++) flight.update(1 / fps, neutral, undefined, intent);
+    near(Math.abs(Quaternion.Dot(banked, rig.rotationQuaternion!)), 1);
+    for (let i = 0; i < fps * 2; i++) flight.update(1 / fps, neutral, undefined, {...intent, roll: 0});
+    near(Math.abs(Quaternion.Dot(Quaternion.Identity(), rig.rotationQuaternion!)), 1);
+  }
+});
+check('assisted stunt is one exact revolution and requires neutral before retriggering', () => {
+  for (const fps of [72, 90, 120]) for (const sign of [-1, 1]) {
+    const control = new RollController();
+    let bank = 0;
+    const options = {active: true, mode: 'assisted' as const, comfort: false, fullRolls: true, gestureStunts: true};
+    const run = (seconds: number, gesture: number) => {
+      for (let i = 0; i < fps * seconds; i++) bank += control.update(1 / fps, bank, gesture, options);
+    };
+    run(0.15, sign);
+    assert.ok(Math.abs(bank) < Math.PI / 3, 'short tilt should only bank');
+    run(8, sign);
+    near(bank, sign * (Math.PI * 2 + 35 * Math.PI / 180), 0.001);
+    run(4, sign);
+    near(bank, sign * (Math.PI * 2 + 35 * Math.PI / 180), 0.001);
+    run(2, 0);
+    near(bank, sign * Math.PI * 2, 0.001);
+    run(6, sign);
+    near(bank, sign * (Math.PI * 4 + 35 * Math.PI / 180), 0.001);
+  }
+});
+check('disabling full rolls prevents stunts and continuous rotation, including after a mode switch', () => {
+  for (const mode of ['assisted', 'free'] as const) {
+    const roll = new RollController();
+    let bank = 0;
+    for (let i = 0; i < 900; i++) bank += roll.update(1 / 90, bank, 1, {active:true, mode, comfort:true, fullRolls:false, gestureStunts:true, stunt:1});
+    near(bank, 20 * Math.PI / 180);
+  }
+});
+check('hover or tracking loss cancels a stunt, stops translation and levels without orbiting the head', () => {
+  const {flight, rig, camera} = setup();
+  for (let i = 0; i < 100; i++) flight.update(1 / 90, neutral, undefined, {active:true, throttle:1, direction:Vector3.Forward(), roll:1});
+  const position = worldHead(rig, camera);
+  let rotation = rig.rotationQuaternion!.clone();
+  for (let i = 0; i < 360; i++) {
+    const telemetry = flight.update(1 / 90, neutral, undefined, {active:false, throttle:0, direction:Vector3.Zero()});
+    near(telemetry.speed, 0);
+    near(Vector3.Distance(worldHead(rig, camera), position), 0);
+    assert.ok(Math.abs(Quaternion.Dot(rotation, rig.rotationQuaternion!)) > 0.999);
+    rotation = rig.rotationQuaternion!.clone();
+  }
+  near(Math.abs(Quaternion.Dot(rotation, Quaternion.Identity())), 1);
+});
+check('keyboard binds speed, non-inverted steering, double-tap stunts and isolated free look', () => {
+  const controls = new DesktopControls();
+  controls.keyDown('ArrowUp', 0);
+  near(controls.read(0).pitch, -1);
+  controls.keyUp('ArrowUp');
+  controls.keyDown('KeyW', 0);
+  near(controls.read(1).throttle, 0.75);
+  controls.keyUp('KeyW');
+  controls.keyDown('ShiftLeft', 10);
+  near(controls.read(0).throttle, 1);
+  controls.keyUp('ShiftLeft');
+  near(controls.read(0).throttle, 0.75);
+  controls.keyDown('Space', 0);
+  near(controls.read(0).brake, 1);
+  controls.clear();
+  controls.keyDown('KeyE', 100);
+  controls.keyDown('KeyE', 200, true);
+  near(controls.read(0).stunt!, 0);
+  controls.keyUp('KeyE');
+  controls.keyDown('KeyE', 250);
+  near(controls.read(0).stunt!, 1);
+  near(controls.read(0).stunt!, 0);
+  controls.clear();
+  controls.keyDown('AltLeft', 300);
+  controls.mouseMove(100, -50);
+  const look = controls.read(0);
+  near(look.aimYaw!, 0); near(look.lookYaw!, 0.25); near(look.lookPitch!, -0.125);
+  controls.clear();
+  near(controls.read(0).roll!, 0);
+  controls.mouseMove(100, -50);
+  const aim = controls.read(0);
+  near(aim.aimYaw!, 0.25); near(aim.aimPitch!, -0.125);
+  near(controls.read(0).aimYaw!, 0);
+});
+check('desktop mouse pointing changes course promptly, free look does not and brake reaches true hover', () => {
+  const {flight, rig, camera} = setup();
+  flight.update(1 / 90, {...neutral, throttle:0.5, aimYaw:Math.PI / 2, aimPitch:-0.25});
+  let movement = Vector3.Zero();
+  for (let i = 0; i < 30; i++) {
+    const before = rig.position.clone();
+    flight.update(1 / 90, {...neutral, throttle:0.5});
+    movement = rig.position.subtract(before);
+  }
+  assert.ok(movement.x > 0.1 && movement.y > 0 && Math.abs(movement.z) < 0.01);
+  const heading = movement.normalizeToNew();
+  for (let i = 0; i < 90; i++) {
+    const before = rig.position.clone();
+    flight.update(1 / 90, {...neutral, throttle:0.5, freeLook:true, lookYaw:0.01});
+    aligned(rig.position.subtract(before), heading);
+  }
+  assert.ok(Math.abs(camera.rotationQuaternion!.y) > 0.2);
+  for (let i = 0; i < 180; i++) flight.update(1 / 90, {...neutral, brake:1});
+  const stopped = rig.position.clone();
+  near(flight.update(1 / 90, {...neutral, brake:1}).speed, 0);
+  near(Vector3.Distance(stopped, rig.position), 0);
 });
 check('grip axes orient both hand models anatomically, including arbitrary controller rotation', () => {
   for (const left of [true, false]) for (const grip of [Quaternion.Identity(), Quaternion.FromEulerAngles(0.7, -1.2, 0.4)]) {

@@ -16,12 +16,16 @@
   <aside>
     <details open><summary>Development scene inspection</summary>
     <p><button id="city">City</button><button id="forest">Forest</button><button id="connection">City → forest</button><button id="arms">Arms</button></p>
-    <label>Left arm lift <input id="left" type="range" min="0" max="90" value="90" /></label>
-    <label>Right arm lift <input id="right" type="range" min="0" max="90" value="90" /></label>
+    <label>Left arm lift <input id="left" type="range" min="0" max="150" value="90" /></label>
+    <label>Right arm lift <input id="right" type="range" min="0" max="150" value="90" /></label>
     <label>Arm extension <input id="reach" type="range" min="0.1" max="0.7" step="0.01" value="0.65" /></label>
     <label>Arm heading <input id="heading" type="range" min="-180" max="180" value="0" /></label>
     <label>Head yaw <input id="head" type="range" min="-180" max="180" value="0" /></label>
     <label>Look down / up <input id="pitch" type="range" min="-70" max="70" value="20" /></label>
+    <label>Head tilt right <input id="tilt" type="range" min="-35" max="35" value="0" /></label>
+    <label>Roll style <select id="roll"><option value="assisted">Assisted</option><option value="free">Free Roll</option></select></label>
+    <label><input id="full-rolls" type="checkbox" checked /> Allow full rolls</label>
+    <p><button id="bank-right">Bank right</button><button id="roll-right">Roll right</button><button id="neutral-roll">Level out</button><button id="hover">Hover</button></p>
     <label><input id="fly" type="checkbox" /> Fly using these poses</label>
     <label><input id="desktop" type="checkbox" /> Test desktop full throttle</label>
     <label><input id="brake" type="checkbox" /> Desktop brake</label>

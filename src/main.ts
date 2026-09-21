@@ -9,10 +9,14 @@ const game = new StarlightGame(canvas);
 const ui = new AppUI(game.settings, {
   enterVR: () => void game.enterVR().catch(() => ui.showToast("Could not start VR — try again from Quest Browser")),
   playDesktop: () => game.startDesktop(),
+  playKeyboard: () => game.startKeyboardDesktop(),
   calibrate: () => game.calibrate(),
   resume: () => game.resume(),
   recalibrate: () => game.recalibrate(),
   restart: () => game.restart(),
+  testWebcam: () => void game.startWebcamDiagnostic(),
+  stopWebcam: () => game.stopWebcamDiagnostic(),
+  startWebcamFlight: () => game.startWebcamFlight(),
 });
 game.attachUI(ui);
 

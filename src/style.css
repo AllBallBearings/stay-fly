@@ -22,7 +22,7 @@ html, body, #game-canvas {
 
 body { background: #040513; }
 
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { color: inherit; }
 
 #game-canvas {
@@ -132,7 +132,7 @@ kbd { color: #eafcff; font: 500 0.68rem "DM Mono", monospace; letter-spacing: 0.
   background: rgba(1, 2, 10, 0.42);
   transition: opacity 260ms, visibility 260ms;
 }
-.modal-card { width: min(520px, 100%); padding: 42px; border-radius: 28px; text-align: center; }
+.modal-card { width: min(520px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 42px; border-radius: 28px; text-align: center; }
 .modal-card > p:not(.step):not(.hint) { color: #aeb8d4; line-height: 1.65; }
 .modal-card .primary { margin-top: 14px; }
 .hint { margin: 12px 0 0; color: #65718e; font-size: 0.72rem; }
@@ -141,6 +141,7 @@ kbd { color: #eafcff; font: 500 0.68rem "DM Mono", monospace; letter-spacing: 0.
 .toggle-row span { display: flex; flex-direction: column; gap: 4px; }
 .toggle-row small { color: #7f8aa7; }
 .toggle-row input { width: 20px; height: 20px; accent-color: var(--cyan); }
+.toggle-row select { color: #e8faff; background: #13283c; border: 1px solid var(--cyan); border-radius: 8px; padding: 8px; font: inherit; }
 .modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
 .modal-actions .text-button { grid-column: 1 / -1; }
 .hud {
@@ -170,6 +171,7 @@ kbd { color: #eafcff; font: 500 0.68rem "DM Mono", monospace; letter-spacing: 0.
 .speed-track i { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--cyan), #a794ff); box-shadow: 0 0 14px var(--cyan); transition: width 90ms linear; }
 .desktop-guide, .world-guide { max-width: 48ch; color: #b0bfd2; font-size: .78rem; line-height: 1.55; }
 .world-guide { color: #90b6a5; }
+.privacy-note { max-width: 54ch; color: #71839c; font-size: .7rem; line-height: 1.5; }
 #speed-value { float: right; color: #dffcff; font-weight: 500; }
 .world-navigation { grid-column: 1 / -1; display: grid; gap: 6px; color: #bfe8da; font-size: .72rem; text-align: center; }
 .world-navigation small { color: #8596ab; font-size: .6rem; }
@@ -178,12 +180,48 @@ kbd { color: #eafcff; font: 500 0.68rem "DM Mono", monospace; letter-spacing: 0.
 .reticle { position: fixed; z-index: 4; top: 50%; left: 50%; width: 8px; height: 8px; transform: translate(-50%,-50%); border: 1px solid rgba(190,250,255,.6); border-radius: 50%; }
 #vignette { position: fixed; z-index: 3; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,8,.86) 100%); transition: opacity 90ms linear; }
 
+.webcam-diagnostic { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(1,2,10,.88); transition: opacity 220ms, visibility 220ms; }
+.webcam-card { display: grid; grid-template-columns: minmax(280px, 380px) minmax(420px, 760px); gap: 26px; width: min(1180px, 100%); max-height: calc(100dvh - 48px); padding: 26px; border-radius: 28px; overflow: auto; }
+.webcam-copy { padding: 16px; }
+.webcam-copy h2 { font-size: clamp(2rem, 4vw, 3.2rem); }
+#webcam-status { min-height: 3.4em; color: #b8c7dd; line-height: 1.55; }
+.webcam-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 22px 0; color: #c9f9ff; font: 500 .72rem/1.5 "DM Mono", monospace; }
+.webcam-metrics span { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(3,8,23,.35); }
+.webcam-instructions { color: #8491ae; font-size: .78rem; line-height: 1.6; }
+.webcam-stage { position: relative; align-self: center; overflow: hidden; min-height: 300px; aspect-ratio: 16 / 9; border: 1px solid rgba(116,246,255,.25); border-radius: 20px; background: #030712; }
+.webcam-stage video, .webcam-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.webcam-stage canvas { pointer-events: none; }
+.webcam-stage.webcam-flight-preview {
+  position: fixed;
+  z-index: 7;
+  top: 18px;
+  right: 18px;
+  width: min(260px, 27vw);
+  min-height: 0;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.48);
+  pointer-events: none;
+}
+.modal.webcam-calibration .modal-card { width: min(760px, 100%); padding: 28px; }
+.webcam-calibration-slot { width: 100%; margin: 18px auto; }
+.webcam-calibration-slot .webcam-stage { width: 100%; min-height: 260px; }
+.calibration-feedback { min-height: 1.6em; margin: 10px 0 16px; color: #9ff8df; font: 500 .76rem/1.5 "DM Mono", monospace; }
+.calibration-feedback[data-tone="error"] { color: #ffb86b; }
+.local-only { position: absolute; left: 14px; bottom: 12px; padding: 6px 9px; border-radius: 999px; background: rgba(2,7,18,.75); color: #9ff8df; font: 500 .58rem "DM Mono", monospace; letter-spacing: .08em; }
+.webcam-stage.webcam-flight-preview .local-only { display: none; }
+.webcam-flight-status { position: fixed; right: 22px; bottom: 18px; color: #9ff8df; font: 500 .64rem "DM Mono", monospace; letter-spacing: .05em; }
+.webcam-flight-status[data-state="tracking-lost"], .webcam-flight-status[data-state="error"] { color: #ffb86b; }
+
 @media (max-width: 800px) {
   .screen { grid-template-columns: 1fr; align-content: center; overflow-y: auto; }
   .controls-card { display: none; }
   .hero { padding: 30px; }
   h1 { font-size: clamp(4.2rem, 24vw, 7rem); }
   .hud { grid-template-columns: 86px 1fr 62px; gap: 14px; padding-inline: 16px; }
+  .webcam-card { grid-template-columns: 1fr; }
+  .webcam-stage { min-height: 220px; }
+  .webcam-stage.webcam-flight-preview { top: 12px; right: 12px; width: min(180px, 34vw); }
 }
 
 @media (prefers-reduced-motion: reduce) {

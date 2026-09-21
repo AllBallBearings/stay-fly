@@ -10,4 +10,6 @@ export interface FlightTelemetry {
 export interface GameSettings {
   comfortMode: boolean;
   vignette: boolean;
+  rollMode?: "assisted" | "free";
+  fullRolls?: boolean;
 }

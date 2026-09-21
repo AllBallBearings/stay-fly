@@ -3,18 +3,32 @@ import { Scalar } from "@babylonjs/core/Maths/math.scalar";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import type { TargetCamera } from "@babylonjs/core/Cameras/targetCamera";
 import type { FlightTelemetry, GameSettings } from "./types";
+import { combinedRoll, handBankAngle, headBankAngle } from "./VRRoll";
+import { RollController } from "./RollController";
 
 interface Intent {
   throttle: number;
   brake: number;
   yaw: number;
   pitch: number;
+  aimYaw?: number;
+  aimPitch?: number;
+  roll?: number;
+  stunt?: number;
+  freeLook?: boolean;
+  lookYaw?: number;
+  lookPitch?: number;
+  hover?: boolean;
+  gestureStunts?: boolean;
+  allowFullRolls?: boolean;
 }
 
 export interface XRFlightIntent {
   active: boolean;
   throttle: number;
   direction: Vector3;
+  /** Signed roll gesture: right positive, independent of translation. */
+  roll?: number;
 }
 
 export interface XRControllerPose {
@@ -41,7 +55,17 @@ export class FlightController {
   private pitchRate = 0;
   private lastSpeed = 0;
   private neutralHeadRotation: Quaternion | null = null;
-  private baseRigRotation = Quaternion.Identity();
+  private rollRate = 0;
+  private neutralHandBank = 0;
+  private readonly rollControl = new RollController();
+  private rollReferenceUp = Vector3.Up();
+  private xrBank = 0;
+  private desktopYaw = 0;
+  private desktopPitch = 0;
+  private desktopHeading = Quaternion.Identity();
+  private desktopBank = 0;
+  private lookYaw = 0;
+  private lookPitch = 0;
   private restDirections = new Map<string, Vector3>();
   private armLengths = new Map<string, number>();
   private flightDirection = Vector3.Forward();
@@ -58,6 +82,7 @@ export class FlightController {
   setCamera(camera: TargetCamera): void {
     this.camera = camera;
     this.neutralHeadRotation = null;
+    this.rollControl.reset();
   }
 
   /** Records the no-thrust/rest pose. Reach is measured deliberately in a second step. */
@@ -68,7 +93,11 @@ export class FlightController {
       this.camera.rotation.y,
       this.camera.rotation.z,
     );
-    this.baseRigRotation.copyFrom(this.rig.rotationQuaternion!);
+    this.rollRate = 0;
+    this.rollControl.reset();
+    Vector3.Up().rotateByQuaternionToRef(this.rig.rotationQuaternion!.multiply(this.neutralHeadRotation), this.rollReferenceUp);
+    this.xrBank = 0;
+    this.neutralHandBank = 0;
     this.restDirections.clear();
     this.armLengths.clear();
     for (const controller of controllers) {
@@ -86,6 +115,7 @@ export class FlightController {
    */
   calibrateFullReach(controllers: ReadonlyArray<XRControllerPose>): number {
     let captured = 0;
+    const capturedHands = new Map<string, Vector3>();
     for (const controller of controllers) {
       const arm = controller.position.subtract(this.getShoulderPosition(controller.handedness));
       const length = arm.length();
@@ -96,8 +126,12 @@ export class FlightController {
       // cannot turn the user's side-arm length into their flight range.
       if (rest && Vector3.Dot(direction, rest) > 0.7) continue;
       this.armLengths.set(controller.handedness, Scalar.Clamp(length, 0.35, 1.15));
+      capturedHands.set(controller.handedness, controller.position);
       captured++;
     }
+    const left = capturedHands.get("left");
+    const right = capturedHands.get("right");
+    if (left && right) this.neutralHandBank = handBankAngle(left, right, this.neutralHeadRotation ?? Quaternion.Identity());
     return captured;
   }
 
@@ -119,10 +153,18 @@ export class FlightController {
     const horizontal = Math.sqrt(direction.x ** 2 + direction.z ** 2);
     const pitch = -Math.atan2(direction.y, horizontal);
     this.rig.rotationQuaternion = Quaternion.FromEulerAngles(pitch, yaw, 0);
-    this.baseRigRotation = this.rig.rotationQuaternion.clone();
+    this.desktopYaw = yaw;
+    this.desktopPitch = pitch;
+    this.desktopHeading.copyFrom(this.rig.rotationQuaternion);
+    this.desktopBank = this.lookYaw = this.lookPitch = 0;
+    this.rollReferenceUp = Vector3.Up();
+    this.xrBank = 0;
+    this.rollControl.reset();
+    this.rollRate = 0;
+    this.neutralHandBank = 0;
     this.restDirections.clear();
     this.armLengths.clear();
-    Vector3.Forward().rotateByQuaternionToRef(this.baseRigRotation, this.flightDirection);
+    Vector3.Forward().rotateByQuaternionToRef(this.rig.rotationQuaternion, this.flightDirection);
     this.speed = 0;
     this.throttle = 0;
     this.yawRate = 0;
@@ -134,32 +176,47 @@ export class FlightController {
     const dt = Math.min(deltaSeconds, 0.05);
     if (xrIntent) return this.updateXRFlight(dt, xrIntent);
     const intent = this.mergeIntent(desktopIntent, gamepad);
-    const headIntent = this.readHeadIntent();
 
     // Desktop has its own speed envelope; do not raise headset speeds implicitly.
     const maxSpeed = this.settings.comfortMode ? 100 : 160;
-    const cruiseSpeed = this.settings.comfortMode ? 22 : 32;
     const maxYaw = this.settings.comfortMode ? 1.15 : 1.6;
     const maxPitch = this.settings.comfortMode ? 0.8 : 1.1;
 
+    const exactHover = intent.hover === true;
     const requestedThrottle = Scalar.Clamp(intent.throttle, 0, 1);
-    this.throttle = Scalar.Lerp(this.throttle, requestedThrottle, 1 - Math.exp(-dt * 7));
+    this.throttle = exactHover ? 0 : Scalar.Lerp(this.throttle, requestedThrottle, 1 - Math.exp(-dt * 7));
     const targetSpeed = intent.brake > 0.1
-      ? 2.5
-      : Scalar.Lerp(cruiseSpeed, maxSpeed, this.throttle);
-    const speedResponse = targetSpeed > this.speed ? 3.5 : 6;
-    this.speed = Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * speedResponse));
+      ? 0
+      : maxSpeed * this.throttle;
+    const speedResponse = targetSpeed > this.speed ? 5 : 18;
+    this.speed = exactHover ? 0 : Scalar.Lerp(this.speed, targetSpeed, 1 - Math.exp(-dt * speedResponse));
+    if (targetSpeed === 0 && this.speed < 0.05) this.speed = 0;
 
-    const requestedYaw = Scalar.Clamp(intent.yaw + headIntent.x * 0.72, -1, 1) * maxYaw;
-    const requestedPitch = Scalar.Clamp(intent.pitch + headIntent.y * 0.72, -1, 1) * maxPitch;
-    this.yawRate = Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * 8));
-    this.pitchRate = Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * 8));
+    const requestedYaw = Scalar.Clamp(intent.yaw, -1, 1) * maxYaw;
+    const requestedPitch = Scalar.Clamp(intent.pitch, -1, 1) * maxPitch;
+    this.yawRate = exactHover ? 0 : Scalar.Lerp(this.yawRate, requestedYaw, 1 - Math.exp(-dt * 8));
+    this.pitchRate = exactHover ? 0 : Scalar.Lerp(this.pitchRate, requestedPitch, 1 - Math.exp(-dt * 8));
 
-    const turn = Quaternion.FromEulerAngles(this.pitchRate * dt, this.yawRate * dt, 0);
-    this.rig.rotationQuaternion = this.rig.rotationQuaternion!.multiply(turn).normalize();
+    this.desktopYaw += this.yawRate * dt + (intent.aimYaw ?? 0);
+    this.desktopPitch = Scalar.Clamp(this.desktopPitch + this.pitchRate * dt + (intent.aimPitch ?? 0), -Math.PI * 0.495, Math.PI * 0.495);
+    Quaternion.SlerpToRef(this.desktopHeading, Quaternion.FromEulerAngles(this.desktopPitch, this.desktopYaw, 0), 1 - Math.exp(-dt * 25), this.desktopHeading);
+    const rollDelta = this.rollControl.update(dt, this.desktopBank, intent.roll ?? 0, {
+      active: !exactHover && intent.brake <= 0.1, mode: this.settings.rollMode ?? "assisted", comfort: this.settings.comfortMode,
+      fullRolls: this.settings.fullRolls !== false && intent.allowFullRolls !== false,
+      gestureStunts: intent.gestureStunts === true, stunt: intent.stunt,
+    });
+    this.desktopBank = Math.atan2(Math.sin(this.desktopBank + rollDelta), Math.cos(this.desktopBank + rollDelta));
+    this.rig.rotationQuaternion = this.desktopHeading.multiply(Quaternion.RotationAxis(Vector3.Forward(), -this.desktopBank));
+    if (intent.freeLook) {
+      this.lookYaw = Scalar.Clamp(this.lookYaw + (intent.lookYaw ?? 0), -Math.PI * 0.9, Math.PI * 0.9);
+      this.lookPitch = Scalar.Clamp(this.lookPitch + (intent.lookPitch ?? 0), -1.3, 1.3);
+    } else {
+      this.lookYaw *= Math.exp(-dt * 12); this.lookPitch *= Math.exp(-dt * 12);
+    }
+    this.camera.rotationQuaternion = Quaternion.FromEulerAngles(this.lookPitch, this.lookYaw, 0);
 
     const forward = Vector3.Zero();
-    Vector3.Forward().rotateByQuaternionToRef(this.rig.rotationQuaternion, forward);
+    Vector3.Forward().rotateByQuaternionToRef(this.desktopHeading, forward);
     this.moveWithinBounds(forward.scale(this.speed * dt));
 
     const acceleration = Math.abs(this.speed - this.lastSpeed) / Math.max(dt, 0.001);
@@ -167,7 +224,7 @@ export class FlightController {
     return {
       speed: this.speed,
       speedRatio: this.speed / maxSpeed,
-      turnIntensity: Scalar.Clamp((Math.abs(this.yawRate) + Math.abs(this.pitchRate)) / (maxYaw + maxPitch), 0, 1),
+      turnIntensity: Scalar.Clamp(Math.max((Math.abs(this.yawRate) + Math.abs(this.pitchRate)) / (maxYaw + maxPitch), Math.abs(rollDelta) / Math.max(dt, 0.001)), 0, 1),
       accelerationIntensity: Scalar.Clamp(acceleration / 9, 0, 1),
     };
   }
@@ -203,6 +260,7 @@ export class FlightController {
         const lift = smoothstep((liftAngle - 0.10) / (Math.PI / 2 - 0.10));
         const reach = smoothstep((extension - 0.10) / (fullReach - 0.10));
         return {
+          controller,
           heading,
           thrust: lift * reach,
         };
@@ -230,10 +288,19 @@ export class FlightController {
     // Exactly the same tracking-to-world rotation used to render the hands. Applying
     // inverse head calibration here alone makes flight disagree with visible arms.
     localDirection.normalize().rotateByQuaternionToRef(this.rig.rotationQuaternion!, direction);
+    const left = activeArms.find((arm) => arm.controller.handedness === "left");
+    const right = activeArms.find((arm) => arm.controller.handedness === "right");
+    let roll = 0;
+    if (left && right && left.thrust > 0.1 && right.thrust > 0.1 && Vector3.Dot(left.heading, right.heading) > 0.5) {
+      const body = this.neutralHeadRotation ?? Quaternion.Identity();
+      const head = this.camera.rotationQuaternion ?? Quaternion.FromEulerAngles(this.camera.rotation.x, this.camera.rotation.y, this.camera.rotation.z);
+      roll = combinedRoll(headBankAngle(head, body), handBankAngle(left.controller.position, right.controller.position, body) - this.neutralHandBank);
+    }
     return {
       active: true,
       throttle,
       direction: direction.normalize(),
+      roll,
     };
   }
 
@@ -265,10 +332,29 @@ export class FlightController {
       }
     }
 
-    // Do not rotate the XR rig toward the flight vector. The headset already supplies
-    // the user's view orientation; rotating its parent made the world swing and also
-    // made the visible hands disagree with the tracking-space steering pose.
-    this.rig.rotationQuaternion!.copyFrom(this.baseRigRotation);
+    const requestedRoll = intent.active ? Scalar.Clamp(intent.roll ?? 0, -1, 1) : 0;
+    const axis = intent.active && intent.direction.lengthSquared() > 0.001 ? intent.direction.normalizeToNew() : this.flightDirection.normalizeToNew();
+    const bank = this.measureBank(axis) ?? this.xrBank;
+    const rollDelta = this.rollControl.update(dt, bank, requestedRoll, {
+      active: intent.active, mode: this.settings.rollMode ?? "assisted", comfort: this.settings.comfortMode,
+      fullRolls: this.settings.fullRolls !== false, gestureStunts: true,
+    });
+    this.xrBank = Math.atan2(Math.sin(bank + rollDelta), Math.cos(bank + rollDelta));
+    this.rollRate = dt > 0 ? rollDelta / dt : 0;
+    if (rollDelta !== 0) {
+      // Rotate about the requested arm direction, which leaves that direction intact.
+      // Sample the next frame's head/hands in tracking space so the generated roll
+      // cannot feed back into the gesture and accelerate itself.
+      const roll = Quaternion.RotationAxis(axis, -rollDelta);
+      const before = Vector3.Zero();
+      this.camera.position.rotateByQuaternionToRef(this.rig.rotationQuaternion!, before);
+      this.rig.rotationQuaternion!.copyFrom(roll.multiply(this.rig.rotationQuaternion!).normalize());
+      const after = Vector3.Zero();
+      this.camera.position.rotateByQuaternionToRef(this.rig.rotationQuaternion!, after);
+      // Pivot at the headset, not at the floor: roll must not swing the player in an arc.
+      this.rig.position.addInPlace(before.subtract(after));
+      this.flightDirection.rotateByQuaternionToRef(roll, this.flightDirection);
+    }
     this.moveWithinBounds(this.flightDirection.scale(this.speed * dt));
 
     const acceleration = Math.abs(this.speed - this.lastSpeed) / Math.max(dt, 0.001);
@@ -276,7 +362,7 @@ export class FlightController {
     return {
       speed: this.speed,
       speedRatio: this.speed / maxSpeed,
-      turnIntensity: Scalar.Clamp(directionTurn / 1.1, 0, 1),
+      turnIntensity: Scalar.Clamp(Math.max(directionTurn / 1.1, Math.abs(this.rollRate) / (Math.PI / 2)), 0, 1),
       accelerationIntensity: Scalar.Clamp(acceleration / 9, 0, 1),
     };
   }
@@ -288,6 +374,7 @@ export class FlightController {
     const trigger = Math.max(gamepad.buttons[0]?.value ?? 0, gamepad.buttons[4]?.value ?? 0);
     const brake = Math.max(gamepad.buttons[1]?.value ?? 0, gamepad.buttons[5]?.value ?? 0);
     return {
+      ...desktop,
       throttle: Math.max(desktop.throttle, trigger),
       brake: Math.max(desktop.brake, brake),
       yaw: Scalar.Clamp(desktop.yaw + deadzone(axes[2] ?? axes[0] ?? 0), -1, 1),
@@ -295,16 +382,15 @@ export class FlightController {
     };
   }
 
-  private readHeadIntent(): Vector3 {
-    if (!this.neutralHeadRotation || !this.camera.rotationQuaternion) return Vector3.Zero();
-    const delta = this.neutralHeadRotation.conjugate().multiply(this.camera.rotationQuaternion).normalize();
-    const forward = Vector3.Zero();
-    Vector3.Forward().rotateByQuaternionToRef(delta, forward);
-    return new Vector3(
-      Scalar.Clamp(forward.x * 1.8, -1, 1),
-      Scalar.Clamp(-forward.y * 1.8, -1, 1),
-      0,
-    );
+  private measureBank(axis: Vector3): number | null {
+    const up = Vector3.Up();
+    up.rotateByQuaternionToRef(this.rig.rotationQuaternion!.multiply(this.neutralHeadRotation ?? Quaternion.Identity()), up);
+    const reference = this.rollReferenceUp.subtract(axis.scale(Vector3.Dot(this.rollReferenceUp, axis)));
+    const projected = up.subtract(axis.scale(Vector3.Dot(up, axis)));
+    // Near vertical there is no meaningful horizon to level toward.
+    if (reference.lengthSquared() < 0.001 || projected.lengthSquared() < 0.001) return null;
+    reference.normalize(); projected.normalize();
+    return Math.atan2(Vector3.Dot(axis, Vector3.Cross(projected, reference)), Vector3.Dot(projected, reference));
   }
 
   private moveWithinBounds(displacement: Vector3): void {
