@@ -63,7 +63,7 @@
         <div class="control-row"><kbd>HANDS DOWN</kbd><span>Stop flying</span></div>
         <div class="control-row"><kbd>LOOK</kbd><span>Look around freely while your arms steer</span></div>
         <div class="control-row"><kbd>BANK</kbd><span>Tilt head right, right hand lower / left higher; reverse for left</span></div>
-        <div class="control-row"><kbd>ROLL</kbd><span>Hold a deeper matching tilt briefly for one full roll; relax to rearm</span></div>
+        <div class="control-row"><kbd>LEVEL</kbd><span>Relax the tilt to smoothly return upright; banking never becomes a barrel roll</span></div>
         <p class="controller-note">Raise your arms a little to drift slowly. Raise and extend farther to accelerate. Rest both at your sides to hover.</p>
       </aside>
     </main>
@@ -116,14 +116,6 @@
         <label class="toggle-row">
           <span><strong>Dynamic vignette</strong><small>Narrows view during motion</small></span>
           <input id="vignette-toggle" type="checkbox" checked />
-        </label>
-        <label class="toggle-row">
-          <span><strong>Roll style</strong><small>Assisted levels out; Free keeps rolling while held</small></span>
-          <select id="roll-mode"><option value="assisted">Assisted</option><option value="free">Free Roll</option></select>
-        </label>
-        <label class="toggle-row">
-          <span><strong>Allow full rolls</strong><small>Turn off for bank-only flight in either style</small></span>
-          <input id="full-rolls" type="checkbox" checked />
         </label>
         <div class="modal-actions">
           <button id="resume" class="primary" type="button">Resume</button>

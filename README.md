@@ -37,7 +37,7 @@ Open the printed local URL. Choose **Play on desktop**, set your neutral pose, t
 | `Esc` | Pause/resume |
 | `R` | Recalibrate |
 
-Hold **Shift** for fast flight: desktop top speed is **160 m/s (576 km/h)**, or **100 m/s (360 km/h)** with comfort mode on. W/S adjusts a persistent speed setting, initially 20% (32/20 m/s); Space brakes to zero. Mouse displacement aims directly with a short smoothing response rather than lingering turn inertia. Banking does not invert steering. Desktop-only field-of-view widening reinforces speed; VR speed and headset field of view are unchanged. Focus loss and mouse capture loss pause desktop flight and clear held inputs.
+Hold **Shift** for fast flight: desktop top speed is **160 m/s (576 km/h)**, or **100 m/s (360 km/h)** with comfort mode on. W/S adjusts a persistent speed setting, initially 20% (32/20 m/s); Space brakes to zero. Mouse displacement aims directly with a short smoothing response rather than lingering turn inertia. Banking does not invert steering. Desktop-only field-of-view widening reinforces speed; headset field of view is unchanged. Focus loss and mouse capture loss pause desktop flight and clear held inputs.
 
 ## One connected world
 
@@ -59,24 +59,20 @@ Open the deployed HTTPS URL in Meta Quest Browser and choose **Enter VR**.
 | Put both controllers at your calibrated rest position | Stop immediately and hover, without altitude drift |
 | Turn or look around | Look freely; head movement does not steer flight |
 | Tilt head right + lower right hand / raise left | Bank right; reverse the gesture for left |
-| Hold a deeper matching tilt briefly | One complete roll in Assisted mode; relax before triggering another |
+| Hold a matching head/hand tilt | Bank smoothly; relaxing the tilt levels you again |
 | A/X while prompted | Calibrate or retry |
 | Thumbstick click | Pause/resume |
 | B/Y or grip while paused | Recalibrate |
-| Thumbstick left/right while paused | Select Assisted / Free Roll |
-| A/X while paused | Enable / disable full rolls |
 
 VR calibration has two steps: first look ahead with **both arms at your sides** and press A/X to set hover; then extend both arms **straight ahead, hands level**, and press A/X again. One-arm calibration also works. The second pose captures your actual controller-to-shoulder reach and, with both hands, your neutral hand-height offset. Seated, standing and prone play use the same controls. For prone play, get comfortable on a clear padded surface first. Raise and extend your arms to fly; lower or retract them to slow down. Your view follows the headset, so you can look elsewhere without changing course, then move your arms toward the new direction to steer there.
 
-Steering uses a single spherical response that closes about 95% of the angle in 120 ms, including a full reversal. The rig never rotates toward the movement vector. Standard VR speed is up to 30 m/s with one arm and 60 m/s with two; comfort mode caps these at 21 and 42 m/s. Missing controller poses contribute no thrust.
+Steering uses a single spherical response that closes about 95% of the angle in 120 ms, including a full reversal. The rig never rotates toward the movement vector. Standard VR speed is up to 70 m/s with one arm and 140 m/s with two; comfort mode caps these at 35 and 70 m/s. Calibrated reach enters a forgiving full-speed plateau at 86% of the captured arm length, avoiding frame-to-frame under-reading at physical full extension. Missing controller poses contribute no thrust.
 
-### Banking and stunt rolls
+### Banking and collisions
 
-**Assisted is the default.** Small matching head/hand tilts set a bank angle up to 35° (20° in comfort mode). Relax to level out. Both arms must be lifted and generally pointing together; head tilt alone, one arm resting, opposing gestures and small tracking jitter do not trigger a roll. Head tilt reaches full input at 25°, and the hand line at 30°; do not strain your neck.
+Small matching head/hand tilts set a bank angle up to 35° (20° in comfort mode). Relax to level out. Both arms must be lifted and generally pointing together; head tilt alone, one arm resting, opposing gestures and small tracking jitter do not trigger banking. Head tilt reaches full input at 25°, and the hand line at 30°; do not strain your neck. VR tilt is bank-only and never triggers a barrel roll.
 
-A strong combined gesture (85% input) held for 0.25 seconds triggers one smooth 360° roll lasting 2.8 seconds (4 seconds in comfort mode). You must relax before another can trigger. This is a rotation around the arm-directed flight path, not a sideways corkscrew; arms continue to steer throughout. Lowering both arms or losing tracking cancels the stunt, stops translation and gently recovers toward level. Rotation pivots at the headset, not the floor, so it does not orbit the player through space.
-
-**Free Roll** instead rotates continuously while the matching gesture (or Q/E) is held, up to 90°/second (45° in comfort mode). Release to keep the current bank; hover to recover level. **Allow full rolls** can be turned off in either mode for bank-only flight. These settings are in the pause menu, including controller-accessible instructions in the headset. Rotation can be intense in VR: start with bank-only flight and stop if uncomfortable. These thresholds need physical Quest testing; simulated tests cannot establish comfort.
+Solid terrain, buildings, rocks and trees use swept collision checks so high-speed movement cannot simply tunnel through them. Impacts reflect along the surface angle and substantially reduce speed; clouds, mist, waterfalls and water remain pass-through.
 
 ## Experimental desktop webcam flight
 

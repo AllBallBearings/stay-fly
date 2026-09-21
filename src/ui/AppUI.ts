@@ -38,8 +38,6 @@ export class AppUI {
   private readonly xrStatus = element("xr-status");
   private readonly comfortMode = element<HTMLInputElement>("comfort-mode");
   private readonly vignetteToggle = element<HTMLInputElement>("vignette-toggle");
-  private readonly rollMode = element<HTMLSelectElement>("roll-mode");
-  private readonly fullRolls = element<HTMLInputElement>("full-rolls");
   private readonly webcamDiagnostic = element("webcam-diagnostic");
   private readonly webcamVideo = element<HTMLVideoElement>("webcam-video");
   private readonly webcamOverlay = element<HTMLCanvasElement>("webcam-overlay");
@@ -73,10 +71,6 @@ export class AppUI {
 
     this.comfortMode.checked = settings.comfortMode;
     this.vignetteToggle.checked = settings.vignette;
-    this.rollMode.value = settings.rollMode ?? "assisted";
-    this.fullRolls.checked = settings.fullRolls !== false;
-    this.rollMode.addEventListener("change", () => { settings.rollMode = this.rollMode.value === "free" ? "free" : "assisted"; });
-    this.fullRolls.addEventListener("change", () => { settings.fullRolls = this.fullRolls.checked; });
     this.comfortMode.addEventListener("change", () => { settings.comfortMode = this.comfortMode.checked; });
     this.vignetteToggle.addEventListener("change", () => {
       settings.vignette = this.vignetteToggle.checked;
@@ -92,8 +86,6 @@ export class AppUI {
   }
 
   setPhase(phase: GamePhase): void {
-    this.rollMode.value = this.settings.rollMode ?? "assisted";
-    this.fullRolls.checked = this.settings.fullRolls !== false;
     this.landing.classList.toggle("hidden", phase !== "landing");
     this.calibration.classList.toggle("hidden", phase !== "calibrating");
     this.pause.classList.toggle("hidden", phase !== "paused");

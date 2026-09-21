@@ -38,7 +38,7 @@ import type { WebcamTracker } from "./webcam/WebcamTracker";
 import { WebcamControls } from "./webcam/WebcamControls";
 
 export class StarlightGame {
-  readonly settings: GameSettings = { comfortMode: true, vignette: true, rollMode: "assisted", fullRolls: true };
+  readonly settings: GameSettings = { comfortMode: true, vignette: true, rollMode: "assisted", fullRolls: false };
   private readonly engine: Engine;
   private readonly scene: Scene;
   private readonly desktopCamera: UniversalCamera;
@@ -58,7 +58,6 @@ export class StarlightGame {
   private trackedPoses: XRControllerPose[] = [];
   private calibrationStep: "hover" | "reach" = "hover";
   private nextNavigationUpdate = 0;
-  private pauseAxisHeld = false;
   private webcamTracker: WebcamTracker | null = null;
   private readonly webcamControls = new WebcamControls();
   private desktopInputMode: "keyboard" | "webcam" = "keyboard";
@@ -80,7 +79,13 @@ export class StarlightGame {
 
     this.world = new SkyWorld(this.scene);
     this.addRegionSigns();
-    this.flight = new FlightController(this.flightRig, this.desktopCamera, this.settings, this.world.flightBounds);
+    this.flight = new FlightController(
+      this.flightRig,
+      this.desktopCamera,
+      this.settings,
+      this.world.flightBounds,
+      (position, displacement) => this.world.resolveFlightMotion(position, displacement),
+    );
     this.flight.reset(this.world.startPosition, this.world.startDirection);
     this.bindInput();
     this.engine.runRenderLoop(() => this.frame());
@@ -248,7 +253,7 @@ export class StarlightGame {
       this.flight.calibrateHover(this.trackedPoses);
       this.calibrationStep = "reach";
       this.ui?.setCalibrationStep("reach");
-      this.showVRPanel("SET YOUR FULL REACH", "Extend both arms straight ahead, hands level, then press A or X. One arm also works. Tilt head and hands together to bank; hold a deeper tilt for one full roll.");
+      this.showVRPanel("SET YOUR FULL REACH", "Extend both arms straight ahead, hands level, then press A or X. One arm also works. Tilt your head and hands together to bank, then relax to level out.");
       return;
     }
     if (this.isInXR() && this.flight.calibrateFullReach(this.trackedPoses) === 0) {
@@ -418,13 +423,6 @@ export class StarlightGame {
     if (this.phase === "calibrating" && calibrate) this.calibrate();
     else if (this.phase === "paused" && recalibrate) this.recalibrate();
     else if (pause) this.togglePause();
-    else if (this.phase === "paused" && this.isInXR()) {
-      const x = gamepads.map((pad) => pad.axes[2] ?? pad.axes[0] ?? 0).find((axis) => Math.abs(axis) > 0.65) ?? 0;
-      if (x && !this.pauseAxisHeld) this.settings.rollMode = x < 0 ? "assisted" : "free";
-      if (calibrate) this.settings.fullRolls = !this.settings.fullRolls;
-      if ((x && !this.pauseAxisHeld) || calibrate) { this.ui?.setPhase("paused"); this.showVRPausePanel(); }
-      this.pauseAxisHeld = x !== 0;
-    } else this.pauseAxisHeld = false;
   }
 
   private readXRFlightIntent(): XRFlightIntent | undefined {
@@ -600,7 +598,7 @@ export class StarlightGame {
   }
 
   private showVRPausePanel(): void {
-    this.showVRPanel("FLIGHT PAUSED", `Roll: ${this.settings.rollMode === "free" ? "Free" : "Assisted"}. Full rolls: ${this.settings.fullRolls ? "ON" : "OFF"}. Stick left/right selects Assisted/Free; A or X toggles full rolls. Click stick to resume. B or Y recalibrates.`);
+    this.showVRPanel("FLIGHT PAUSED", "Head and hand tilt controls bank only and always levels when relaxed. Click the thumbstick to resume. Press B or Y to recalibrate.");
   }
 
   private hideVRPanel(): void {

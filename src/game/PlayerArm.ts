@@ -37,12 +37,13 @@ export class PlayerArm {
     this.root = new TransformNode(`arm-${id}`, scene);
     this.root.parent = rig;
     this.material = new StandardMaterial(`skin-${id}`, scene);
-    this.material.diffuseColor = new Color3(0.62, 0.39, 0.27);
-    this.material.specularColor = new Color3(0.085, 0.065, 0.055);
-    this.material.specularPower = 24;
+    this.material.diffuseColor = new Color3(0.58, 0.36, 0.26);
+    this.material.specularColor = new Color3(0.055, 0.042, 0.036);
+    this.material.specularPower = 18;
     this.sleeveMaterial = new StandardMaterial(`sleeve-${id}`, scene);
-    this.sleeveMaterial.diffuseColor = new Color3(0.065, 0.085, 0.11);
-    this.sleeveMaterial.specularColor = new Color3(0.04, 0.04, 0.04);
+    this.sleeveMaterial.diffuseColor = new Color3(0.035, 0.09, 0.19);
+    this.sleeveMaterial.specularColor = new Color3(0.075, 0.1, 0.14);
+    this.sleeveMaterial.specularPower = 32;
     const sphere = (name: string, size: Vector3, parent: TransformNode) => {
       const mesh = CreateSphere(`${id}-${name}`, { diameter: 1, segments: 16 }, scene);
       mesh.scaling.copyFrom(size);
@@ -65,17 +66,16 @@ export class PlayerArm {
       mesh.rotationQuaternion = Quaternion.Identity();
       return mesh;
     };
-    this.upper = segment("upper-arm", [0.046, 0.055, 0.06, 0.061, 0.059, 0.056, 0.052, 0.047, 0.042, 0.037, 0.034]);
-    this.upper.scaling.z = 0.88;
-    this.lower = segment("forearm", [0.034, 0.039, 0.045, 0.047, 0.046, 0.043, 0.039, 0.035, 0.031, 0.028, 0.027]);
-    this.lower.scaling.z = 0.8;
-    this.elbow = sphere("elbow", new Vector3(0.067, 0.065, 0.066), this.root);
-
-    const sleeve = segment("short-sleeve", [0.048, 0.057, 0.063, 0.064, 0.063, 0.061]);
-    sleeve.parent = this.upper;
-    sleeve.position.y = -0.27;
-    sleeve.scaling.y = 0.46;
-    sleeve.material = this.sleeveMaterial;
+    this.upper = segment("upper-arm", [0.038, 0.045, 0.051, 0.053, 0.052, 0.049, 0.045, 0.041, 0.037, 0.033, 0.03]);
+    this.upper.scaling.z = 0.84;
+    this.lower = segment("forearm", [0.031, 0.035, 0.041, 0.043, 0.042, 0.039, 0.035, 0.032, 0.029, 0.026, 0.024]);
+    this.lower.scaling.z = 0.76;
+    this.elbow = sphere("elbow", new Vector3(0.043, 0.041, 0.042), this.root);
+    // A fitted flight suit makes the inferred geometry read as an intentional avatar
+    // arm rather than a bare cylindrical tube. Skin remains visible at the tracked fist.
+    this.upper.material = this.sleeveMaterial;
+    this.lower.material = this.sleeveMaterial;
+    this.elbow.material = this.sleeveMaterial;
 
     this.fist = new TransformNode(`fist-${id}`, scene);
     this.fist.parent = this.root;
@@ -117,20 +117,16 @@ export class PlayerArm {
       return mesh;
     };
     const mirror = left ? 1 : -1;
+    // Model the curled fingers as one padded mass with subtle knuckle landmarks.
+    // This reads as a closed human fist at headset distance without the old row of
+    // detached capsule "sausages" at the controller tip.
+    const curled = sphere("curled-fingers", new Vector3(0.043, 0.031, 0.036), this.fist);
+    curled.position.set(0, -0.014, 0.038);
     for (let i = 0; i < 4; i++) {
-      // Index through little finger: staggered heights and lengths, not a row of beads.
-      const x = mirror * (0.028 - i * 0.018);
-      const z = [0.035, 0.041, 0.036, 0.024][i];
-      const radius = [0.0105, 0.0108, 0.0101, 0.0088][i];
-      const knuckle = new Vector3(x, 0.008 - i * 0.001, z);
-      const curl = new Vector3(x, -0.015, z + 0.012);
-      const fold = new Vector3(x, -0.038, z - 0.004);
-      const tip = new Vector3(x, -0.032, z - 0.024);
-      bone(`finger-${i}-proximal`, knuckle, curl, radius);
-      bone(`finger-${i}-middle`, curl, fold, radius, radius * 0.9);
-      bone(`finger-${i}-tip`, fold, tip, radius * 0.9, radius * 0.8);
+      const ridge = sphere("knuckle-ridge", new Vector3(0.009, 0.006, 0.012), this.fist);
+      ridge.position.set(mirror * (0.027 - i * 0.018), 0.015 - Math.abs(1.5 - i) * 0.002, 0.049);
     }
-    sphere("thumb-base", new Vector3(0.03, 0.032, 0.045), this.fist).position.set(mirror * 0.026, -0.013, -0.015);
+    sphere("thumb-base", new Vector3(0.026, 0.028, 0.039), this.fist).position.set(mirror * 0.027, -0.012, -0.008);
     bone("thumb-proximal", new Vector3(mirror * 0.033, -0.015, -0.02), new Vector3(mirror * 0.039, -0.03, 0.008), 0.0115, 0.0105);
     bone("thumb-distal", new Vector3(mirror * 0.039, -0.03, 0.008), new Vector3(mirror * 0.015, -0.038, 0.028), 0.0105, 0.009);
 
@@ -160,9 +156,10 @@ export class PlayerArm {
     if (bend.lengthSquared() < 0.0001) {
       bend = Vector3.Cross(axis, Math.abs(axis.y) < 0.9 ? Vector3.Up() : Vector3.Forward());
     }
-    // Equal bone lengths yield a stable elbow on the circle between shoulder and wrist.
-    // Allow visual extension for players whose reach exceeds the default estimate.
-    const boneLength = Math.max(0.34, distance * 0.501);
+    // Use human-scale bones while allowing the chain to become visually straight at
+    // full reach. The previous 34 cm minimum forced a conspicuous bend for the shorter
+    // shoulder-to-controller distances commonly reported by Quest tracking.
+    const boneLength = Math.max(0.255, distance * 0.5005);
     const bendDistance = Math.sqrt(Math.max(0, boneLength ** 2 - (distance * 0.5) ** 2));
     const elbow = shoulder.add(wrist).scale(0.5).add(bend.normalize().scale(bendDistance));
     this.elbow.position.copyFrom(elbow);

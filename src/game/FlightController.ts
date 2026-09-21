@@ -41,6 +41,14 @@ export interface FlightBounds {
   radius: number;
 }
 
+export interface FlightCollision {
+  displacement: Vector3;
+  normal: Vector3;
+  speedScale: number;
+}
+
+export type FlightCollisionResolver = (position: Vector3, displacement: Vector3) => FlightCollision | null;
+
 const SHOULDER_WIDTH = 0.36;
 const SHOULDER_DROP = 0.18;
 const smoothstep = (value: number) => {
@@ -75,6 +83,7 @@ export class FlightController {
     private camera: TargetCamera,
     private readonly settings: GameSettings,
     private readonly bounds?: FlightBounds,
+    private readonly resolveCollision?: FlightCollisionResolver,
   ) {
     this.rig.rotationQuaternion = Quaternion.Identity();
   }
@@ -257,8 +266,15 @@ export class FlightController {
         const fullReach = this.armLengths.get(controller.handedness) ?? 0.65;
         // Resting straight arms have full length too. Lift away from the recorded rest
         // pose AND extension determine thrust; there is no minimum moving speed.
-        const lift = smoothstep((liftAngle - 0.10) / (Math.PI / 2 - 0.10));
-        const reach = smoothstep((extension - 0.10) / (fullReach - 0.10));
+        // Forward does not need to be an exact 90-degree departure from the recorded
+        // side pose. Shoulder anatomy, controller grip position and a slightly prone
+        // hover pose all make that unreliable. Treat roughly 60 degrees as fully raised.
+        const lift = smoothstep((liftAngle - 0.08) / (Math.PI / 3 - 0.08));
+        // XR grip/shoulder estimates routinely under-report physical reach. Calibrated
+        // players therefore enter a forgiving full-reach plateau at 86% of the captured
+        // length instead of having to exceed a single exact sample every frame.
+        const fullSpeedReach = Math.max(0.32, fullReach * 0.86);
+        const reach = smoothstep((extension - 0.18) / (fullSpeedReach - 0.18));
         return {
           controller,
           heading,
@@ -305,7 +321,9 @@ export class FlightController {
   }
 
   private updateXRFlight(dt: number, intent: XRFlightIntent): FlightTelemetry {
-    const maxSpeed = this.settings.comfortMode ? 42 : 60;
+    // Both modes retain the same arm mapping; comfort changes the speed envelope.
+    // The unrestricted value is intentionally superhero-fast.
+    const maxSpeed = this.settings.comfortMode ? 70 : 140;
     const targetSpeed = intent.active ? maxSpeed * intent.throttle : 0;
     const response = targetSpeed > this.speed ? 8 : 18;
     this.speed = intent.active
@@ -336,8 +354,8 @@ export class FlightController {
     const axis = intent.active && intent.direction.lengthSquared() > 0.001 ? intent.direction.normalizeToNew() : this.flightDirection.normalizeToNew();
     const bank = this.measureBank(axis) ?? this.xrBank;
     const rollDelta = this.rollControl.update(dt, bank, requestedRoll, {
-      active: intent.active, mode: this.settings.rollMode ?? "assisted", comfort: this.settings.comfortMode,
-      fullRolls: this.settings.fullRolls !== false, gestureStunts: true,
+      active: intent.active, mode: "assisted", comfort: this.settings.comfortMode,
+      fullRolls: false, gestureStunts: false,
     });
     this.xrBank = Math.atan2(Math.sin(bank + rollDelta), Math.cos(bank + rollDelta));
     this.rollRate = dt > 0 ? rollDelta / dt : 0;
@@ -394,12 +412,28 @@ export class FlightController {
   }
 
   private moveWithinBounds(displacement: Vector3): void {
-    const nextPosition = this.rig.position.add(displacement);
+    let movement = displacement;
+    if (this.resolveCollision && displacement.lengthSquared() > 1e-8) {
+      this.rig.computeWorldMatrix(true);
+      this.camera.computeWorldMatrix();
+      const collision = this.resolveCollision(this.camera.globalPosition.clone(), displacement);
+      if (collision) {
+        movement = collision.displacement;
+        const normal = collision.normal.normalizeToNew();
+        const incoming = this.flightDirection;
+        this.flightDirection = incoming.subtract(normal.scale(2 * Vector3.Dot(incoming, normal))).normalize();
+        this.speed *= collision.speedScale;
+      }
+    }
+    const nextPosition = this.rig.position.add(movement);
     if (this.bounds) {
       const fromCenter = nextPosition.subtract(this.bounds.center);
       const distance = fromCenter.length();
       if (distance > this.bounds.radius) {
-        nextPosition.copyFrom(this.bounds.center).addInPlace(fromCenter.scale(this.bounds.radius / distance));
+        const outward = fromCenter.scale(1 / distance);
+        nextPosition.copyFrom(this.bounds.center).addInPlace(outward.scale(this.bounds.radius - 0.5));
+        this.flightDirection = this.flightDirection.subtract(outward.scale(2 * Vector3.Dot(this.flightDirection, outward))).normalize();
+        this.speed *= 0.35;
       }
     }
     this.rig.position.copyFrom(nextPosition);

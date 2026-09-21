@@ -4,6 +4,7 @@ import { Scene } from '@babylonjs/core/scene';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
 import { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera';
 import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { Scalar } from '@babylonjs/core/Maths/math.scalar';
 import { FlightController, type XRControllerPose } from '../src/game/FlightController';
 import { PlayerArm } from '../src/game/PlayerArm';
 import { SkyWorld } from '../src/game/Course';
@@ -56,7 +57,7 @@ check('desktop reaches high speed quickly in both modes and brakes without chang
     for (let i = 0; i < fps * 3; i++) telemetry = flight.update(1 / fps, {...neutral, throttle: 0.2});
     assert.ok(Math.abs(telemetry.speed - max * 0.2) < 0.1);
     for (let i = 0; i < fps * 2; i++) telemetry = flight.update(1 / fps, neutral, undefined, {active:true, throttle:1, direction:Vector3.Forward()});
-    assert.ok(Math.abs(telemetry.speed - (comfortMode ? 42 : 60)) < 0.01);
+    assert.ok(Math.abs(telemetry.speed - (comfortMode ? 70 : 140)) < 0.01);
     scene.dispose();
   }
 });
@@ -158,7 +159,7 @@ check('rest is zero; small lifts start slowly; raising either arm is monotonic t
       assert.ok(intent.throttle >= previous - 1e-9);
       assert.ok(intent.throttle <= 0.5);
       if (i === 0) near(intent.throttle, 0);
-      if (i === 10) assert.ok(intent.throttle > 0 && intent.throttle < 0.01);
+      if (i === 10) assert.ok(intent.throttle > 0 && intent.throttle < 0.08);
       previous = intent.throttle;
     }
     near(previous, 0.5);
@@ -185,6 +186,7 @@ check('two-step calibration maps each player reach to full thrust and rejects an
   const medium = [pose('left', Vector3.Forward(), 0.66)];
   const mediumThrottle = flight.createXRIntent(medium).throttle;
   assert.ok(mediumThrottle > 0 && mediumThrottle < 0.5, `uncalibrated gradient: ${mediumThrottle}`);
+  near(flight.createXRIntent([pose('left', Vector3.Forward(), 0.72)]).throttle, 0.5);
   near(flight.createXRIntent([pose('left', Vector3.Forward(), 0.82)]).throttle, 0.5);
 });
 check('second arm adds thrust without a mode-switch jump; equal reaches average centrally', () => {
@@ -301,17 +303,14 @@ const worldHead = (rig: TransformNode, camera: UniversalCamera) => {
   camera.position.rotateByQuaternionToRef(rig.rotationQuaternion!, position);
   return position.addInPlace(rig.position);
 };
-check('full rolls preserve arm heading, rotate the correct way and pivot at the headset at 72/90/120 Hz', () => {
+check('VR tilt stays a bounded bank even when obsolete free-roll settings are supplied', () => {
   for (const fps of [72, 90, 120]) for (const sign of [-1, 1]) {
     const {flight, rig, camera, pose, scene} = setup(Quaternion.Identity(), Vector3.Forward(), 'free');
     const arms = [pose('left', new Vector3(0, sign * 0.2, 1)), pose('right', new Vector3(0, -sign * 0.2, 1))];
     const initialHeading = flight.createXRIntent(arms).direction;
-    for (let i = 0; i < fps; i++) flight.update(1 / fps, neutral, undefined, flight.createXRIntent(arms));
     camera.rotationQuaternion = Quaternion.FromEulerAngles(0, 0, -sign * Math.PI / 7);
-    let totalAngle = 0;
     for (let i = 0; i < fps * 6; i++) {
       const before = worldHead(rig, camera);
-      const rotation = rig.rotationQuaternion!.clone();
       const intent = flight.createXRIntent(arms);
       aligned(intent.direction, initialHeading);
       const telemetry = flight.update(1 / fps, neutral, undefined, intent);
@@ -319,22 +318,15 @@ check('full rolls preserve arm heading, rotate the correct way and pivot at the 
       aligned(movement, initialHeading);
       near(movement.length(), telemetry.speed / fps);
       near(rig.rotationQuaternion!.length(), 1);
-      totalAngle += 2 * Math.acos(Math.min(1, Math.abs(Quaternion.Dot(rotation, rig.rotationQuaternion!))));
-      if (i === Math.floor(fps / 2)) {
-        const up = Vector3.Up();
-        up.rotateByQuaternionToRef(rig.rotationQuaternion!, up);
-        assert.ok(up.x * sign > 0.3, 'right roll must tilt the body to the right');
-      }
     }
-    assert.ok(totalAngle > Math.PI * 2, 'must complete a full roll without clamping or flipping');
-    const banked = rig.rotationQuaternion!.clone();
+    const up = Vector3.Up();
+    up.rotateByQuaternionToRef(rig.rotationQuaternion!, up);
+    assert.ok(up.x * sign > 0.2, 'right bank must tilt the body to the right');
+    const bankAngle = Math.acos(Scalar.Clamp(Vector3.Dot(up, Vector3.Up()), -1, 1));
+    assert.ok(bankAngle < Math.PI / 4, 'VR bank must never continue into a barrel roll');
     camera.rotationQuaternion = Quaternion.Identity();
-    flight.update(1 / fps, neutral, undefined, flight.createXRIntent(arms));
-    near(Quaternion.Dot(banked, rig.rotationQuaternion!), 1);
-    const stopped = worldHead(rig, camera);
-    flight.update(1 / fps, neutral, undefined, flight.createXRIntent([]));
-    near(Vector3.Distance(stopped, worldHead(rig, camera)), 0);
-    assert.ok(Math.abs(Quaternion.Dot(banked, rig.rotationQuaternion!)) > 0.999, 'hover recovery must be gradual');
+    for (let i = 0; i < fps * 2; i++) flight.update(1 / fps, neutral, undefined, {...flight.createXRIntent(arms), roll: 0});
+    near(Math.abs(Quaternion.Dot(Quaternion.Identity(), rig.rotationQuaternion!)), 1, 0.001);
     scene.dispose();
   }
 });
@@ -356,17 +348,15 @@ check('pointing changes remain direct and responsive while the body is rolled', 
     assert.ok(Vector3.Dot(movement.normalizeToNew(), worldDirection) > 0.999);
   }
 });
-check('comfort limits roll to 45 degrees/second versus 90 and recalibration does not snap the view', () => {
+check('VR comfort caps bank at 20 degrees versus 35 and recalibration does not snap the view', () => {
   for (const comfortMode of [true, false]) {
     const {rig, camera, scene} = setup();
     const flight = new FlightController(rig, camera, {comfortMode, vignette: true, rollMode: 'free'});
     flight.calibrate();
     const intent = {active: true, throttle: 1, direction: Vector3.Forward(), roll: 1};
     for (let i = 0; i < 180; i++) flight.update(1 / 90, neutral, undefined, intent);
-    const before = rig.rotationQuaternion!.clone();
-    flight.update(1 / 90, neutral, undefined, intent);
-    const angle = 2 * Math.acos(Math.min(1, Quaternion.Dot(before, rig.rotationQuaternion!)));
-    near(angle * 90, comfortMode ? Math.PI / 4 : Math.PI / 2);
+    const angle = 2 * Math.acos(Math.min(1, Math.abs(Quaternion.Dot(Quaternion.Identity(), rig.rotationQuaternion!))));
+    near(angle, (comfortMode ? 20 : 35) * Math.PI / 180, 0.001);
     const banked = rig.rotationQuaternion!.clone();
     flight.calibrateHover();
     near(Quaternion.Dot(banked, rig.rotationQuaternion!), 1);
@@ -525,6 +515,12 @@ check('visible hands match tracked grips with locally merged geometry in a trans
     const bounds = handMesh.getBoundingInfo().boundingBox;
     assert.ok(Vector3.Distance(bounds.centerWorld, worldGrip) < 0.05, 'hand must not double the rig translation');
     assert.ok(bounds.extendSize.length() < 0.12, 'hand stays human-sized');
+    if (length === 0.8) {
+      const shoulder = flight.getShoulderPosition('left');
+      const wrist = hand.position.add(new Vector3(0, 0, -0.06));
+      const elbow = scene.getMeshByName('test-left-elbow')!;
+      assert.ok(Vector3.Distance(elbow.position, shoulder.add(wrist).scale(0.5)) < 0.04, 'full reach should visually straighten the elbow');
+    }
     for (const mesh of arm.root.getChildMeshes()) assert.ok(mesh.position.asArray().every(Number.isFinite));
   }
   arm.dispose();
@@ -584,6 +580,13 @@ check('expanded world builds and batches correctly with city, forest and enclosi
     assert.ok(mesh.getBoundingInfo().boundingBox.centerWorld.asArray().every(Number.isFinite));
   }
   assert.ok(world.flightBounds.radius > 4000);
+  const city = WORLD_REGIONS.find((region) => region.id === 'neon-city')!;
+  const bounce = world.resolveFlightMotion(city.position.add(new Vector3(96, 180, 0)), Vector3.Down().scale(220));
+  assert.ok(bounce && bounce.normal.y > 0.5, 'solid city geometry should produce an upward collision normal');
+  assert.ok(bounce.speedScale < 0.6 && bounce.displacement.length() < 220, 'collision should slow and deflect motion');
+  for (const mesh of scene.meshes.filter((item) => item.material?.name === 'clouds' || item.material?.name === 'crystal-water')) {
+    assert.notEqual(mesh.metadata?.flightCollision, true, `${mesh.material?.name} must remain pass-through`);
+  }
   console.log(`World: ${scene.meshes.length} batches, ${scene.meshes.reduce((sum, mesh) => sum + mesh.getTotalVertices(), 0)} vertices`);
   scene.dispose();
 });

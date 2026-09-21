@@ -5,13 +5,14 @@ import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { RawTexture } from "@babylonjs/core/Materials/Textures/rawTexture";
 import { Texture } from "@babylonjs/core/Materials/Textures/texture";
+import { Ray } from "@babylonjs/core/Culling/ray";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import { CreateIcoSphere } from "@babylonjs/core/Meshes/Builders/icoSphereBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import type { Scene } from "@babylonjs/core/scene";
-import type { FlightBounds } from "./FlightController";
+import type { FlightBounds, FlightCollision } from "./FlightController";
 import { REGION_CONNECTIONS, WORLD_REGIONS } from "./WorldNavigation";
 import { terrainDisk, terrainHeight, terrainStrip } from "./Terrain";
 
@@ -48,6 +49,32 @@ export class SkyWorld {
     }
   }
 
+  /** Swept headset collision with a damped billiard-rail reflection. */
+  resolveFlightMotion(position: Vector3, displacement: Vector3): FlightCollision | null {
+    const distance = displacement.length();
+    if (distance < 0.0001) return null;
+    const direction = displacement.scale(1 / distance);
+    const clearance = 0.65;
+    const hit = this.scene.pickWithRay(
+      new Ray(position, direction, distance + clearance),
+      (mesh) => mesh.isEnabled() && mesh.isPickable && mesh.metadata?.flightCollision === true,
+      false,
+    );
+    if (!hit?.hit || !hit.pickedPoint || hit.distance > distance + clearance) return null;
+    let normal = hit.getNormal(true, true) ?? direction.scale(-1);
+    if (Vector3.Dot(direction, normal) > 0) normal = normal.scale(-1);
+    normal.normalize();
+    const approach = Math.max(0, hit.distance - clearance);
+    const remaining = Math.max(0, distance - approach);
+    const reflected = direction.subtract(normal.scale(2 * Vector3.Dot(direction, normal))).normalize();
+    const impact = Math.max(0, -Vector3.Dot(direction, normal));
+    return {
+      displacement: direction.scale(approach).addInPlace(reflected.scale(remaining * 0.28)).addInPlace(normal.scale(0.025)),
+      normal,
+      speedScale: 0.38 + (1 - impact) * 0.2,
+    };
+  }
+
   get startPosition(): Vector3 { return new Vector3(0, 55, -250); }
   get startDirection(): Vector3 { return Vector3.Forward(); }
 
@@ -61,7 +88,7 @@ export class SkyWorld {
     const waterfallIsland = this.createIsland("azure-falls", at("azure-falls"), 1400, 180, "lush");
     this.addCrystalPool(waterfallIsland, new Vector3(0, 0.7, 0), 180);
     this.addWaterfall(waterfallIsland, new Vector3(-650, -75, 0), 100, 210);
-    this.addGrove(waterfallIsland, 900, 580);
+    this.addGrove(waterfallIsland, 1350, 580);
     finishDistrict();
 
     const cityIsland = this.createIsland("neon-city", at("neon-city"), 1750, 200, "city");
@@ -69,7 +96,7 @@ export class SkyWorld {
     finishDistrict();
 
     const groveIsland = this.createIsland("quiet-grove", at("quiet-grove"), 1600, 180, "lush");
-    this.addGrove(groveIsland, 1300, 690);
+    this.addGrove(groveIsland, 1950, 690);
     this.addCrystalPool(groveIsland, new Vector3(0, 0.7, 0), 160);
     finishDistrict();
 
@@ -79,7 +106,7 @@ export class SkyWorld {
     finishDistrict();
 
     const gardenIsland = this.createIsland("little-garden", at("little-garden"), 1400, 160, "lush");
-    this.addGrove(gardenIsland, 700, 580);
+    this.addGrove(gardenIsland, 1050, 580);
     finishDistrict();
 
     this.addRegionConnections();
@@ -143,7 +170,7 @@ export class SkyWorld {
     // Animated waterfalls, water and the boundary keep their separate materials.
     const batches = new Map<string, Mesh[]>();
     for (const mesh of this.scene.meshes) {
-      if (mesh.metadata?.terrain) { mesh.freezeWorldMatrix(); continue; }
+      if (mesh.metadata?.terrain) { mesh.isPickable = true; mesh.freezeWorldMatrix(); continue; }
       if (existingMeshes.has(mesh) || !(mesh instanceof Mesh) || !mesh.material || mesh.material.alpha < 1 || mesh.metadata?.canopyLOD) continue;
       mesh.computeWorldMatrix(true);
       const p = mesh.getBoundingInfo().boundingBox.centerWorld;
@@ -156,17 +183,20 @@ export class SkyWorld {
     // lane markings). setParent preserves each mesh's world transform.
     for (const batch of batches.values()) for (const mesh of batch) mesh.setParent(null);
     for (const [key, batch] of batches) {
+      const collidable = batch.some((source) => source.metadata?.flightPassThrough !== true);
       const lowDetail = batch.map((source) => this.distantCanopies.get(source)).filter((mesh): mesh is Mesh => Boolean(mesh));
       const mesh = batch.length > 1 ? Mesh.MergeMeshes(batch, true, true) : batch[0];
       if (!mesh) continue;
       mesh.name = `scenery-${key}`;
-      mesh.isPickable = false;
+      mesh.isPickable = collidable;
+      mesh.metadata = { flightCollision: collidable };
       mesh.freezeWorldMatrix();
       if (lowDetail.length === batch.length) {
         const lod = lowDetail.length > 1 ? Mesh.MergeMeshes(lowDetail, true, true) : lowDetail[0];
         if (lod) {
           lod.name = `distant-${key}`;
-          lod.isPickable = false;
+          lod.isPickable = collidable;
+          lod.metadata = { flightCollision: collidable };
           lod.freezeWorldMatrix();
           mesh.addLODLevel(700, lod);
         }
@@ -202,7 +232,7 @@ export class SkyWorld {
     terrainDisk(name, diameter * 0.485).applyToMesh(top);
     top.parent = root;
     // Preserve separate terrain meshes for geometry checks and spatial bounds.
-    top.metadata = { terrain: true, region: name };
+    top.metadata = { terrain: true, region: name, flightCollision: true };
     top.material = style === "lush"
       ? this.material("island-grass", new Color3(0.24, 0.34, 0.16), new Color3(0.01, 0.015, 0.005))
       : this.material("city-ground", new Color3(0.27, 0.32, 0.38), new Color3(0.025, 0.035, 0.05));
@@ -365,12 +395,23 @@ export class SkyWorld {
     for (let index = 0; index < count; index += 1) {
       const angle = this.random() * Math.PI * 2;
       const distance = Math.sqrt(this.random()) * radius;
-      const height = 10 + this.random() * 16;
+      // A layered forest: saplings, mid-story trees and 40–60 ft canopy trees.
+      const sizeClass = this.random();
+      const height = sizeClass < 0.2
+        ? 6 + this.random() * 4
+        : sizeClass < 0.68
+          ? 10 + this.random() * 5
+          : 15 + this.random() * 3.5;
       const x = Math.cos(angle) * distance;
       const z = Math.sin(angle) * distance;
       // Open central lake and a winding corridor wide enough to fly below the canopy.
       if (distance < 100 || Math.abs(x - Math.sin(z / 110) * 65) < 15) continue;
-      const trunk = CreateCylinder(`${root.name}-trunk-${index}`, { diameterTop: 0.5, diameterBottom: 1.4, height, tessellation: 7 }, this.scene);
+      const trunk = CreateCylinder(`${root.name}-trunk-${index}`, {
+        diameterTop: Math.max(0.5, height * 0.055),
+        diameterBottom: Math.max(1.15, height * 0.13),
+        height,
+        tessellation: 8,
+      }, this.scene);
       trunk.parent = root;
       const ground = terrainHeight(root.name, x, z);
       trunk.position.set(x, ground + height / 2 - 0.25, z);
@@ -383,10 +424,10 @@ export class SkyWorld {
         rock.material = rockMaterial;
       }
 
-      const crownRadius = 4 + this.random() * 4;
+      const crownRadius = height * (0.52 + this.random() * 0.2);
       for (let tier = 0; tier < 3; tier++) {
         const crown = index % 3 === 0
-          ? CreateCylinder(`${root.name}-pine`, { diameterTop: 0, diameterBottom: crownRadius * (2 - tier * 0.35), height: 9, tessellation: 9 }, this.scene)
+          ? CreateCylinder(`${root.name}-pine`, { diameterTop: 0, diameterBottom: crownRadius * (2 - tier * 0.35), height: height * 0.42, tessellation: 9 }, this.scene)
           : CreateIcoSphere(`${root.name}-canopy`, { radius: crownRadius * (1 - tier * 0.15), subdivisions: 2, flat: false }, this.scene);
         crown.parent = root;
         crown.position.set(x + (index % 3 ? Math.sin(tier * 3) * 3 : 0), ground + height - 3 + tier * 4, z + (index % 3 ? Math.cos(tier * 3) * 3 : 0));
@@ -395,7 +436,7 @@ export class SkyWorld {
         // Distant foliage keeps its silhouette with fewer polygons. These sources are
         // excluded from the main batch pass and attached to the corresponding batch.
         const distant = index % 3 === 0
-          ? CreateCylinder("distant-pine", { diameterTop: 0, diameterBottom: crownRadius * (2 - tier * 0.35), height: 9, tessellation: 5 }, this.scene)
+          ? CreateCylinder("distant-pine", { diameterTop: 0, diameterBottom: crownRadius * (2 - tier * 0.35), height: height * 0.42, tessellation: 5 }, this.scene)
           : CreateIcoSphere("distant-canopy", { radius: crownRadius * (1 - tier * 0.15), subdivisions: 1, flat: false }, this.scene);
         distant.parent = root;
         distant.position.copyFrom(crown.position);
@@ -442,6 +483,8 @@ export class SkyWorld {
         cloud.position.copyFrom(center.add(new Vector3((piece - pieceCount / 2) * 80, this.random() * 40, (this.random() - 0.5) * 90)));
         cloud.scaling.y = 0.45 + this.random() * 0.22;
         cloud.material = cloudMaterial;
+        cloud.isPickable = false;
+        cloud.metadata = { flightPassThrough: true };
         cloudPieces.push(cloud);
       }
     }
