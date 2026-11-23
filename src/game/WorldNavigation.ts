@@ -15,9 +15,22 @@ export const REGION_CONNECTIONS: readonly (readonly [RegionId, RegionId])[] = [
   ["azure-falls", "little-garden"], ["little-garden", "sky-harbor"], ["quiet-grove", "sky-harbor"],
 ];
 
-export function getWorldNavigation(position: Vector3, forward: Vector3): { region: string; directions: string } {
+export interface NavigationRegion {
+  readonly id: string;
+  readonly name: string;
+  readonly position: Vector3;
+  readonly radius: number;
+}
+
+/** Current region plus arrows to the two nearest others, relative to the view heading. */
+export function getWorldNavigation(
+  position: Vector3,
+  forward: Vector3,
+  regions: readonly NavigationRegion[] = WORLD_REGIONS,
+  outside = "Between districts",
+): { region: string; directions: string } {
   const heading = Math.atan2(forward.x, forward.z);
-  const nearby = WORLD_REGIONS.map((region) => ({
+  const nearby = regions.map((region) => ({
     ...region,
     distance: Math.hypot(region.position.x - position.x, region.position.z - position.z),
   })).sort((a, b) => a.distance - b.distance);
@@ -29,5 +42,5 @@ export function getWorldNavigation(position: Vector3, forward: Vector3): { regio
     const distance = region.distance >= 1000 ? `${(region.distance / 1000).toFixed(1)} km` : `${Math.round(region.distance / 10) * 10} m`;
     return `${arrow} ${region.name} · ${distance}`;
   }).join("    /    ");
-  return { region: current?.name ?? "Between districts", directions };
+  return { region: current?.name ?? outside, directions };
 }

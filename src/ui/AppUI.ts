@@ -1,4 +1,5 @@
 import type { FlightTelemetry, GamePhase, GameSettings } from "../game/types";
+import { WORLD_CHOICES, type WorldId } from "../game/GameWorld";
 import type { TrackingSample, WebcamDiagnosticState } from "../game/webcam/types";
 import { classifyHand } from "../game/webcam/WebcamControls";
 
@@ -19,6 +20,8 @@ interface UIActions {
   testWebcam: () => void;
   stopWebcam: () => void;
   startWebcamFlight: () => void;
+  selectWorld: (id: WorldId) => void;
+  changeWorld: () => void;
 }
 
 const element = <T extends HTMLElement>(id: string): T => {
@@ -48,6 +51,11 @@ export class AppUI {
   private readonly webcamMetrics = element("webcam-metrics");
   private readonly startWebcamFlightButton = element<HTMLButtonElement>("start-webcam-flight");
   private readonly webcamFlightStatus = element("webcam-flight-status");
+  private readonly worldGuide = element("world-guide");
+  private readonly worldCards = new Map<WorldId, HTMLButtonElement>();
+  private readonly playButtons = ["play-desktop", "play-keyboard"].map((id) => element<HTMLButtonElement>(id));
+  private xrSupported = false;
+  private worldLoading = false;
   private webcamFlightMode = false;
   private diagnosticLastSampleAt = 0;
   private diagnosticFps = 0;
@@ -68,6 +76,8 @@ export class AppUI {
     element("restart-webcam").addEventListener("click", actions.testWebcam);
     element("stop-webcam").addEventListener("click", actions.stopWebcam);
     this.startWebcamFlightButton.addEventListener("click", actions.startWebcamFlight);
+    element("change-world").addEventListener("click", actions.changeWorld);
+    this.buildWorldPicker(actions.selectWorld);
 
     this.comfortMode.checked = settings.comfortMode;
     this.vignetteToggle.checked = settings.vignette;
@@ -78,8 +88,61 @@ export class AppUI {
     });
   }
 
+  private buildWorldPicker(select: (id: WorldId) => void): void {
+    const picker = element("world-picker");
+    for (const choice of WORLD_CHOICES) {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "world-card";
+      card.setAttribute("role", "radio");
+      card.dataset.world = choice.id;
+      const art = document.createElement("span");
+      art.className = "world-art";
+      art.dataset.world = choice.id;
+      art.setAttribute("aria-hidden", "true");
+      const copy = document.createElement("span");
+      copy.className = "world-copy";
+      const name = document.createElement("strong");
+      name.textContent = choice.name;
+      const tagline = document.createElement("small");
+      tagline.textContent = choice.tagline;
+      copy.append(name, tagline);
+      card.append(art, copy);
+      card.addEventListener("click", () => select(choice.id));
+      picker.append(card);
+      this.worldCards.set(choice.id, card);
+    }
+    // Arrow keys move between worlds like a native radio group.
+    picker.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const ids = WORLD_CHOICES.map((choice) => choice.id);
+      const current = ids.findIndex((id) => this.worldCards.get(id)?.getAttribute("aria-checked") === "true");
+      const step = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+      const next = ids[(Math.max(0, current) + step + ids.length) % ids.length];
+      this.worldCards.get(next)?.focus();
+      select(next);
+    });
+  }
+
+  /** Marks the chosen world; play buttons wait while a world is being built. */
+  setWorld(id: WorldId, loading: boolean): void {
+    this.worldLoading = loading;
+    for (const [worldId, card] of this.worldCards) {
+      const selected = worldId === id;
+      card.setAttribute("aria-checked", String(selected));
+      card.tabIndex = selected ? 0 : -1;
+      card.toggleAttribute("aria-busy", selected && loading);
+    }
+    const choice = WORLD_CHOICES.find((item) => item.id === id);
+    this.worldGuide.textContent = loading ? `Painting ${choice?.name ?? "the world"}…` : choice?.guide ?? "";
+    for (const button of this.playButtons) button.disabled = loading;
+    this.enterVRButton.disabled = loading || !this.xrSupported;
+  }
+
   setXRSupport(supported: boolean): void {
-    this.enterVRButton.disabled = !supported;
+    this.xrSupported = supported;
+    this.enterVRButton.disabled = !supported || this.worldLoading;
     this.xrStatus.textContent = supported
       ? "WebXR headset detected — ready for takeoff."
       : "Immersive VR is not available here. Desktop flight is ready.";

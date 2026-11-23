@@ -1,4 +1,4 @@
-import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Quaternion, Vector3, Vector4 } from "@babylonjs/core/Maths/math.vector";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
@@ -12,8 +12,10 @@ import { CreateIcoSphere } from "@babylonjs/core/Meshes/Builders/icoSphereBuilde
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import type { Scene } from "@babylonjs/core/scene";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { FlightBounds, FlightCollision } from "./FlightController";
-import { REGION_CONNECTIONS, WORLD_REGIONS } from "./WorldNavigation";
+import type { GameWorld, WorldEnvironment, WorldNavigation } from "./GameWorld";
+import { getWorldNavigation, REGION_CONNECTIONS, WORLD_REGIONS } from "./WorldNavigation";
 import { terrainDisk, terrainHeight, terrainStrip } from "./Terrain";
 
 interface WaterfallSheet {
@@ -22,17 +24,49 @@ interface WaterfallSheet {
   phase: number;
 }
 
-export class SkyWorld {
+/** The original world: five connected districts floating above the clouds. */
+export class SkyWorld implements GameWorld {
+  readonly id = "sky-islands" as const;
   private readonly waterfallSheets: WaterfallSheet[] = [];
   private readonly distantCanopies = new Map<Mesh, Mesh>();
+  private readonly meshes: AbstractMesh[];
   private seed = 7331;
   readonly flightBounds: FlightBounds = {
     center: new Vector3(50, 30, 1100),
     radius: 4500,
   };
+  readonly environment: WorldEnvironment = {
+    clearColor: new Color4(0.22, 0.48, 0.76, 1),
+    ambientColor: new Color3(0.34, 0.44, 0.55),
+    fogColor: new Color3(0.34, 0.58, 0.78),
+    fogDensity: 0.00016,
+    skyLight: { direction: new Vector3(0.2, 1, -0.15), diffuse: new Color3(0.72, 0.88, 1), ground: new Color3(0.19, 0.27, 0.35), intensity: 0.78 },
+    sunLight: { direction: new Vector3(-0.5, -0.8, 0.35), diffuse: new Color3(1, 0.88, 0.68), intensity: 0.86 },
+    toneMapping: true,
+    exposure: 0.9,
+    contrast: 1.06,
+    glowIntensity: 0.34,
+    vignette: 1.4,
+  };
 
   constructor(private readonly scene: Scene) {
+    const before = new Set(scene.meshes);
     this.buildWorld();
+    this.createSky();
+    this.meshes = scene.meshes.filter((mesh) => !before.has(mesh));
+  }
+
+  /** Meshes created outside the world (such as GUI signs) that should follow its visibility. */
+  adopt(meshes: readonly AbstractMesh[]): void {
+    this.meshes.push(...meshes);
+  }
+
+  setEnabled(enabled: boolean): void {
+    for (const mesh of this.meshes) mesh.setEnabled(enabled);
+  }
+
+  navigate(position: Vector3, forward: Vector3): WorldNavigation {
+    return getWorldNavigation(position, forward);
   }
 
   reset(): void {
@@ -77,6 +111,25 @@ export class SkyWorld {
 
   get startPosition(): Vector3 { return new Vector3(0, 55, -250); }
   get startDirection(): Vector3 { return Vector3.Forward(); }
+
+  private createSky(): void {
+    const dome = CreateSphere("sky-dome", { diameter: 20000, segments: 20, sideOrientation: Mesh.BACKSIDE }, this.scene);
+    const material = new StandardMaterial("sky", this.scene);
+    material.disableLighting = true;
+    material.backFaceCulling = false;
+    material.emissiveColor = new Color3(0.12, 0.34, 0.66);
+    dome.material = material;
+    dome.infiniteDistance = true;
+    dome.isPickable = false;
+
+    const sun = CreateSphere("sun", { diameter: 28, segments: 16 }, this.scene);
+    sun.position.set(-260, 210, 390);
+    const sunMaterial = new StandardMaterial("sun-material", this.scene);
+    sunMaterial.disableLighting = true;
+    sunMaterial.emissiveColor = new Color3(1, 0.67, 0.26);
+    sun.material = sunMaterial;
+    sun.infiniteDistance = true;
+  }
 
   private buildWorld(): void {
     let existingMeshes = new Set(this.scene.meshes);

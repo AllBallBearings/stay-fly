@@ -84,6 +84,46 @@ h1 span {
 h2 { font-size: clamp(2rem, 5vw, 3.6rem); line-height: 1; letter-spacing: -0.06em; }
 .intro { max-width: 510px; color: #b8c1dd; font-size: 1.03rem; line-height: 1.7; }
 
+.world-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 26px; }
+.world-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+  padding: 9px 14px 9px 9px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(137, 170, 255, 0.06);
+  text-align: left;
+}
+.world-card[aria-checked="true"] {
+  border-color: rgba(116, 246, 255, 0.7);
+  background: rgba(116, 246, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(116, 246, 255, 0.3);
+}
+.world-card:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.world-art { flex: none; width: 64px; height: 46px; border-radius: 11px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.world-art[data-world="sky-islands"] {
+  background:
+    radial-gradient(ellipse 34% 16% at 30% 74%, #eef8ff 92%, transparent 100%),
+    radial-gradient(ellipse 28% 14% at 66% 54%, #6b9a4f 92%, transparent 100%),
+    radial-gradient(circle at 78% 26%, #ffc46b 0 7%, transparent 9%),
+    linear-gradient(#2a6db6, #9fd2f5);
+}
+.world-art[data-world="starfall-lake"] {
+  background:
+    radial-gradient(circle at 36% 63%, #9a9e8a 0 19%, #2a3644 19.5% 21%, transparent 22%),
+    linear-gradient(90deg, #4f5a56 0 9%, transparent 9% 84%, #0f1116 84%),
+    radial-gradient(circle at 24% 16%, #fff 0 1.6%, transparent 2.4%),
+    radial-gradient(circle at 58% 10%, #fff 0 1.4%, transparent 2.2%),
+    radial-gradient(circle at 70% 30%, #dfe8f6 0 1.2%, transparent 2%),
+    radial-gradient(circle at 46% 26%, #5e6272 0 5%, transparent 6%),
+    linear-gradient(#141b26 0, #2e4a63 52%, #8a9182 56%, #4a6c71 70%, #4c4a28 84%);
+}
+.world-copy strong { display: block; font-size: 0.9rem; }
+.world-copy small { display: block; margin-top: 3px; color: #8f9bb8; font-size: 0.68rem; line-height: 1.35; }
+.world-card[aria-busy] .world-copy small::after { content: " · painting…"; color: var(--cyan); }
+
 .actions { display: flex; gap: 12px; margin-top: 30px; flex-wrap: wrap; }
 button {
   min-height: 54px;
@@ -217,6 +257,7 @@ kbd { color: #eafcff; font: 500 0.68rem "DM Mono", monospace; letter-spacing: 0.
   .screen { grid-template-columns: 1fr; align-content: center; overflow-y: auto; }
   .controls-card { display: none; }
   .hero { padding: 30px; }
+  .world-picker { grid-template-columns: 1fr; }
   h1 { font-size: clamp(4.2rem, 24vw, 7rem); }
   .hud { grid-template-columns: 86px 1fr 62px; gap: 14px; padding-inline: 16px; }
   .webcam-card { grid-template-columns: 1fr; }

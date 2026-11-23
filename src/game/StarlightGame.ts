@@ -16,11 +16,9 @@ import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { Engine } from "@babylonjs/core/Engines/engine";
 import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { ImageProcessingConfiguration } from "@babylonjs/core/Materials/imageProcessingConfiguration";
-import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
-import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { Scene } from "@babylonjs/core/scene";
 import { UniversalCamera } from "@babylonjs/core/Cameras/universalCamera";
 import type { WebXRDefaultExperience } from "@babylonjs/core/XR/webXRDefaultExperience";
@@ -28,10 +26,11 @@ import type { WebXRInputSource } from "@babylonjs/core/XR/webXRInputSource";
 import { WebXRState } from "@babylonjs/core/XR/webXRTypes";
 import { AdvancedDynamicTexture, Control, Rectangle, StackPanel, TextBlock } from "@babylonjs/gui/2D";
 import { SkyWorld } from "./Course";
-import { FlightController, type FlightIntent, type XRControllerPose, type XRFlightIntent } from "./FlightController";
+import { FlightController, type FlightBounds, type FlightIntent, type XRControllerPose, type XRFlightIntent } from "./FlightController";
 import { PlayerArm } from "./PlayerArm";
 import { DesktopControls } from "./DesktopControls";
-import { getWorldNavigation, WORLD_REGIONS } from "./WorldNavigation";
+import { WORLD_REGIONS } from "./WorldNavigation";
+import { DEFAULT_WORLD, isWorldId, type GameWorld, type WorldEnvironment, type WorldId } from "./GameWorld";
 import type { GamePhase, GameSettings } from "./types";
 import type { AppUI } from "../ui/AppUI";
 import type { WebcamTracker } from "./webcam/WebcamTracker";
@@ -43,7 +42,19 @@ export class StarlightGame {
   private readonly scene: Scene;
   private readonly desktopCamera: UniversalCamera;
   private readonly flightRig: TransformNode;
-  private readonly world: SkyWorld;
+  private readonly worlds = new Map<WorldId, GameWorld>();
+  private world: GameWorld | null = null;
+  private selectedWorld: WorldId = savedWorld();
+  private worldRequest = 0;
+  private worldLoading = false;
+  /** Mutable so the flight controller follows whichever world is active. */
+  private readonly bounds: FlightBounds = { center: Vector3.Zero(), radius: 1e6 };
+  private skyLight!: HemisphericLight;
+  private sunLight!: DirectionalLight;
+  private glow!: GlowLayer;
+  /** Desktop-only vertical lens shift used by painted opening views (NDC units). */
+  private lensShift = 0;
+  private lensShiftTarget = 0;
   private flight: FlightController;
   private xr: WebXRDefaultExperience | null = null;
   private ui: AppUI | null = null;
@@ -76,24 +87,137 @@ export class StarlightGame {
     this.desktopCamera.fov = 1.08;
     this.desktopCamera.parent = this.flightRig;
     this.scene.activeCamera = this.desktopCamera;
+    // A painted opening view can shift the lens like a two-point-perspective painting.
+    this.desktopCamera.onProjectionMatrixChangedObservable.add(() => {
+      if (!this.lensShift) return;
+      const projection = this.desktopCamera.getProjectionMatrix();
+      const m = projection.m;
+      projection.setRowFromFloats(2, m[8], m[9] + this.lensShift, m[10], m[11]);
+    });
 
-    this.world = new SkyWorld(this.scene);
-    this.addRegionSigns();
     this.flight = new FlightController(
       this.flightRig,
       this.desktopCamera,
       this.settings,
-      this.world.flightBounds,
-      (position, displacement) => this.world.resolveFlightMotion(position, displacement),
+      this.bounds,
+      (position, displacement) => this.world?.resolveFlightMotion(position, displacement) ?? null,
     );
-    this.flight.reset(this.world.startPosition, this.world.startDirection);
+    void this.selectWorld(this.selectedWorld);
     this.bindInput();
     this.engine.runRenderLoop(() => this.frame());
     window.addEventListener("resize", () => this.engine.resize());
     window.addEventListener("pagehide", () => this.stopWebcamDiagnostic());
   }
 
-  attachUI(ui: AppUI): void { this.ui = ui; }
+  attachUI(ui: AppUI): void {
+    this.ui = ui;
+    ui.setWorld(this.selectedWorld, this.worldLoading);
+  }
+
+  get worldId(): WorldId { return this.selectedWorld; }
+
+  /** Switches worlds from the main menu, building each one the first time it is chosen. */
+  async selectWorld(id: WorldId): Promise<void> {
+    if (this.phase !== "landing" && this.world) return;
+    const request = ++this.worldRequest;
+    this.selectedWorld = id;
+    let world = this.worlds.get(id);
+    if (!world) {
+      this.worldLoading = true;
+      this.ui?.setWorld(id, true);
+      // Let the menu paint its loading state before the synchronous world build.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      try {
+        world = await this.createWorld(id);
+      } catch (error) {
+        console.error(`Could not build world ${id}`, error);
+        this.ui?.showToast("That world could not be loaded");
+        if (request === this.worldRequest) {
+          this.worldLoading = false;
+          if (id !== DEFAULT_WORLD) void this.selectWorld(DEFAULT_WORLD);
+        }
+        return;
+      }
+      world.setEnabled(false);
+      this.worlds.set(id, world);
+    }
+    if (request !== this.worldRequest) return;
+    this.worldLoading = false;
+    this.world?.setEnabled(false);
+    this.world = world;
+    world.setEnabled(true);
+    this.applyEnvironment(world.environment);
+    this.bounds.center.copyFrom(world.flightBounds.center);
+    this.bounds.radius = world.flightBounds.radius;
+    this.resetToStart();
+    storeWorld(id);
+    this.ui?.setWorld(id, false);
+  }
+
+  /** Leaves flight (and VR) for the main menu, where another world can be picked. */
+  returnToMenu(): void {
+    this.webcamAutoCalibrationPending = false;
+    this.webcamCalibrationRun++;
+    this.webcamCalibrationBusy = false;
+    this.desktopInputMode = "keyboard";
+    this.webcamTracker?.stop();
+    this.ui?.setWebcamFlightMode(false);
+    this.hideVRPanel();
+    this.phase = "landing";
+    this.resetToStart();
+    this.ui?.setPhase(this.phase);
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (this.isInXR()) void this.xr!.baseExperience.exitXRAsync();
+  }
+
+  private async createWorld(id: WorldId): Promise<GameWorld> {
+    if (id === "starfall-lake") {
+      const { StarfallLake } = await import("./starfall/StarfallLake");
+      return new StarfallLake(this.scene);
+    }
+    const world = new SkyWorld(this.scene);
+    world.adopt(this.createRegionSigns());
+    return world;
+  }
+
+  private applyEnvironment(environment: WorldEnvironment): void {
+    const scene = this.scene;
+    scene.clearColor = environment.clearColor.clone();
+    scene.ambientColor = environment.ambientColor.clone();
+    scene.fogColor = environment.fogColor.clone();
+    scene.fogDensity = environment.fogDensity;
+    this.skyLight.direction = environment.skyLight.direction.clone();
+    this.skyLight.diffuse = environment.skyLight.diffuse.clone();
+    this.skyLight.groundColor = environment.skyLight.ground.clone();
+    this.skyLight.intensity = environment.skyLight.intensity;
+    this.sunLight.direction = environment.sunLight.direction.clone();
+    this.sunLight.diffuse = environment.sunLight.diffuse.clone();
+    this.sunLight.intensity = environment.sunLight.intensity;
+    const imaging = scene.imageProcessingConfiguration;
+    imaging.toneMappingEnabled = environment.toneMapping;
+    imaging.exposure = environment.exposure;
+    imaging.contrast = environment.contrast;
+    imaging.vignetteWeight = this.settings.vignette ? environment.vignette : 0;
+    this.glow.intensity = environment.glowIntensity;
+    this.glow.isEnabled = environment.glowIntensity > 0;
+  }
+
+  /** Returns to the active world's launch point and its painted opening view. */
+  private resetToStart(): void {
+    const world = this.world;
+    if (!world) return;
+    this.desktopControls.reset();
+    this.flight.reset(world.startPosition, world.startDirection);
+    // Undo any speed-widened field of view so the opening composition is exact.
+    this.desktopCamera.fov = 1.08;
+    this.lensShiftTarget = this.isInXR() ? 0 : world.openingLensShift ?? 0;
+    this.setLensShift(this.lensShiftTarget);
+  }
+
+  private setLensShift(value: number): void {
+    this.lensShift = Math.abs(value) < 0.0005 ? 0 : value;
+    this.desktopCamera.getProjectionMatrix(true);
+  }
 
   async initializeXR(): Promise<boolean> {
     const browserXR = (navigator as Navigator & { xr?: { isSessionSupported(mode: string): Promise<boolean> } }).xr;
@@ -132,20 +256,23 @@ export class StarlightGame {
         camera.minZ = 0.05;
         camera.maxZ = 12000;
         this.flight.setCamera(camera);
+        // Headsets always begin level at the launch point, never with a lens shift.
+        this.resetToStart();
         this.beginCalibration();
       }
-      if (state === WebXRState.NOT_IN_XR && this.phase !== "landing") {
+      if (state === WebXRState.NOT_IN_XR) {
         this.desktopCamera.parent = this.flightRig;
         this.scene.activeCamera = this.desktopCamera;
         this.flight.setCamera(this.desktopCamera);
-        this.pauseGame();
+        if (this.phase === "landing") this.resetToStart();
+        else this.pauseGame();
       }
     });
     return true;
   }
 
   async enterVR(): Promise<void> {
-    if (!this.xr) return;
+    if (!this.xr || !this.world || this.worldLoading) return;
     this.ui?.setWebcamFlightMode(false);
     this.stopWebcamDiagnostic();
     await this.xr.baseExperience.enterXRAsync("immersive-vr", "local-floor");
@@ -171,6 +298,7 @@ export class StarlightGame {
   }
 
   startKeyboardDesktop(): void {
+    if (!this.world || this.worldLoading) return;
     this.webcamAutoCalibrationPending = false;
     this.desktopInputMode = "keyboard";
     this.ui?.setWebcamFlightMode(false);
@@ -179,7 +307,7 @@ export class StarlightGame {
   }
 
   private async startHandTrackingDesktop(): Promise<void> {
-    if (this.isInXR() || !this.ui) return;
+    if (this.isInXR() || !this.ui || !this.world || this.worldLoading) return;
     this.desktopInputMode = "webcam";
     this.webcamControls.resetCalibration();
     this.webcamEmergencyHover = false;
@@ -263,9 +391,7 @@ export class StarlightGame {
     }
     if (!this.isInXR() && this.desktopInputMode === "keyboard") this.flight.calibrateHover();
     this.hideVRPanel();
-    this.phase = "flying";
-    this.lastFrameTime = performance.now();
-    this.ui?.setPhase(this.phase);
+    this.beginFlight();
     this.ui?.showToast(this.isInXR() ? "Reach calibrated — go anywhere" : this.desktopInputMode === "webcam" ? "Webcam flight ready — raise your arms" : "Neutral pose set — go anywhere");
   }
 
@@ -280,9 +406,7 @@ export class StarlightGame {
   recalibrate(): void { this.beginCalibration(); }
 
   restart(): void {
-    this.desktopControls.reset();
-    this.world.reset();
-    this.flight.reset(this.world.startPosition, this.world.startDirection);
+    this.resetToStart();
     this.beginCalibration();
   }
 
@@ -345,10 +469,16 @@ export class StarlightGame {
     if (!active()) return;
     this.webcamCalibrationBusy = false;
     this.hideVRPanel();
+    this.beginFlight();
+    this.ui.showToast("Webcam flight ready — fists fly, an open palm hovers");
+  }
+
+  private beginFlight(): void {
     this.phase = "flying";
     this.lastFrameTime = performance.now();
-    this.ui.setPhase(this.phase);
-    this.ui.showToast("Webcam flight ready — fists fly, an open palm hovers");
+    // Ease out of any painted opening composition into a centred flight view.
+    this.lensShiftTarget = 0;
+    this.ui?.setPhase(this.phase);
   }
 
   private pauseGame(): void {
@@ -369,10 +499,14 @@ export class StarlightGame {
     this.readXRControllers();
     // A/X may just have calibrated the body pose used by this frame's controls.
     if (this.isInXR()) this.xrFlightIntent = this.flight.createXRIntent(this.trackedPoses);
-    if (this.phase === "flying") {
+    this.world?.update(now / 1000);
+    if (this.lensShift !== this.lensShiftTarget) {
+      const eased = this.lensShiftTarget + (this.lensShift - this.lensShiftTarget) * Math.exp(-Math.min(deltaSeconds, 0.1) * 2.4);
+      this.setLensShift(Math.abs(eased - this.lensShiftTarget) < 0.001 ? this.lensShiftTarget : eased);
+    }
+    if (this.phase === "flying" && this.world) {
       const gamepad = this.desktopInputMode === "keyboard" ? this.activeGamepad : undefined;
       const telemetry = this.flight.update(deltaSeconds, this.readDesktopIntent(deltaSeconds), gamepad, this.xrFlightIntent);
-      this.world.update(now / 1000);
       this.ui?.updateFlight(telemetry);
       if (!this.isInXR()) {
         // A subtle desktop-only widening reinforces speed without changing headset optics.
@@ -381,13 +515,13 @@ export class StarlightGame {
       }
       if (now >= this.nextNavigationUpdate) {
         const camera = this.scene.activeCamera!;
-        const navigation = getWorldNavigation(camera.globalPosition, camera.getForwardRay().direction);
+        const navigation = this.world.navigate(camera.globalPosition, camera.getForwardRay().direction);
         this.ui?.updateNavigation(navigation.region, navigation.directions);
         this.nextNavigationUpdate = now + 150;
       }
       const vignette = Math.min(0.7, telemetry.turnIntensity * 0.46 + telemetry.accelerationIntensity * 0.34);
       this.ui?.setVignette(vignette);
-      this.scene.imageProcessingConfiguration.vignetteWeight = this.settings.vignette ? 1.4 + vignette * 2.4 : 0;
+      this.scene.imageProcessingConfiguration.vignetteWeight = this.settings.vignette ? this.world.environment.vignette + vignette * 2.4 : 0;
     } else {
       this.ui?.setVignette(0);
     }
@@ -498,9 +632,12 @@ export class StarlightGame {
     const rim = new DirectionalLight("sunlight", new Vector3(-0.5, -0.8, 0.35), scene);
     rim.intensity = 0.86;
     rim.diffuse = new Color3(1, 0.88, 0.68);
+    this.skyLight = ambient;
+    this.sunLight = rim;
 
     const glow = new GlowLayer("sky-glow", scene, { blurKernelSize: 32 });
     glow.intensity = 0.34;
+    this.glow = glow;
     scene.imageProcessingConfiguration.toneMappingEnabled = true;
     scene.imageProcessingConfiguration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
     scene.imageProcessingConfiguration.exposure = 0.9;
@@ -509,32 +646,12 @@ export class StarlightGame {
     scene.imageProcessingConfiguration.vignetteBlendMode = ImageProcessingConfiguration.VIGNETTEMODE_MULTIPLY;
     scene.imageProcessingConfiguration.vignetteColor = new Color4(0, 0, 0.02, 1);
     scene.imageProcessingConfiguration.vignetteWeight = 1.4;
-
-    this.createSky(scene);
     return scene;
   }
 
-  private createSky(scene: Scene): void {
-    const dome = CreateSphere("sky-dome", { diameter: 20000, segments: 20, sideOrientation: Mesh.BACKSIDE }, scene);
-    const material = new StandardMaterial("sky", scene);
-    material.disableLighting = true;
-    material.backFaceCulling = false;
-    material.emissiveColor = new Color3(0.12, 0.34, 0.66);
-    dome.material = material;
-    dome.infiniteDistance = true;
-    dome.isPickable = false;
-
-    const sun = CreateSphere("sun", { diameter: 28, segments: 16 }, scene);
-    sun.position.set(-260, 210, 390);
-    const sunMaterial = new StandardMaterial("sun-material", scene);
-    sunMaterial.disableLighting = true;
-    sunMaterial.emissiveColor = new Color3(1, 0.67, 0.26);
-    sun.material = sunMaterial;
-    sun.infiniteDistance = true;
-  }
-
-  private addRegionSigns(): void {
+  private createRegionSigns(): Mesh[] {
     // In-world labels work on the headset too; the desktop HUD is not visible in XR.
+    const signs: Mesh[] = [];
     for (const region of WORLD_REGIONS) {
       const sign = CreatePlane(`district-sign-${region.id}`, { width: 160, height: 30 }, this.scene);
       sign.position.copyFrom(region.position).addInPlace(new Vector3(0, region.signHeight, 0));
@@ -553,7 +670,9 @@ export class StarlightGame {
       label.fontSize = 72;
       label.fontWeight = "600";
       panel.addControl(label);
+      signs.push(sign);
     }
+    return signs;
   }
 
   private showVRPanel(title: string, body: string): void {
@@ -607,4 +726,24 @@ export class StarlightGame {
   }
 
   private isInXR(): boolean { return this.xr?.baseExperience.state === WebXRState.IN_XR; }
+}
+
+const WORLD_STORAGE_KEY = "stay-fly.world";
+
+/** The last world chosen on this device; storage may be unavailable (private mode). */
+function savedWorld(): WorldId {
+  try {
+    const value = globalThis.localStorage?.getItem(WORLD_STORAGE_KEY);
+    return isWorldId(value) ? value : DEFAULT_WORLD;
+  } catch {
+    return DEFAULT_WORLD;
+  }
+}
+
+function storeWorld(id: WorldId): void {
+  try {
+    globalThis.localStorage?.setItem(WORLD_STORAGE_KEY, id);
+  } catch {
+    // Remembering the choice is a convenience only.
+  }
 }

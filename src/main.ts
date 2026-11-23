@@ -17,6 +17,8 @@ const ui = new AppUI(game.settings, {
   testWebcam: () => void game.startWebcamDiagnostic(),
   stopWebcam: () => game.stopWebcamDiagnostic(),
   startWebcamFlight: () => game.startWebcamFlight(),
+  selectWorld: (id) => void game.selectWorld(id),
+  changeWorld: () => game.returnToMenu(),
 });
 game.attachUI(ui);
 

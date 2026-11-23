@@ -15,6 +15,11 @@ import { RollController } from '../src/game/RollController';
 import { DesktopControls } from '../src/game/DesktopControls';
 import { WebcamControls } from '../src/game/webcam/WebcamControls';
 import type { TrackingSample } from '../src/game/webcam/types';
+import { WORLD_CHOICES, isWorldId } from '../src/game/GameWorld';
+import { StarfallLake } from '../src/game/starfall/StarfallLake';
+import { atDepth, onPlane, projectToReference, REFERENCE_LENS_SHIFT, REFERENCE_VIEW } from '../src/game/starfall/reference';
+import { groundHeight, lakeDistance, LAKE_OUTLINE, MOUNTAINS, WATER_LEVEL } from '../src/game/starfall/valley';
+import { SKY } from '../src/game/starfall/sky';
 
 const engine = new NullEngine();
 const neutral = { throttle: 0, brake: 0, yaw: 0, pitch: 0 };
@@ -588,6 +593,79 @@ check('expanded world builds and batches correctly with city, forest and enclosi
     assert.notEqual(mesh.metadata?.flightCollision, true, `${mesh.material?.name} must remain pass-through`);
   }
   console.log(`World: ${scene.meshes.length} batches, ${scene.meshes.reduce((sum, mesh) => sum + mesh.getTotalVertices(), 0)} vertices`);
+  scene.dispose();
+});
+check('world menu lists both worlds with unique ids', () => {
+  const ids = WORLD_CHOICES.map((choice) => choice.id);
+  assert.deepEqual(ids, ['sky-islands', 'starfall-lake']);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(isWorldId('starfall-lake') && !isWorldId('moon-base') && !isWorldId(null));
+});
+check('starfall reference camera round-trips frame pixels and frames the painted horizon', () => {
+  for (const [px, py, z] of [[700, 300, 1234], [1765, 852, 116], [100, 1200, 60], [2200, 40, 3000]]) {
+    const projected = projectToReference(atDepth(px, py, z));
+    near(projected.x, px, 1e-6);
+    near(projected.y, py, 1e-6);
+  }
+  near(REFERENCE_LENS_SHIFT, 1 - 2 * 987 / 1228);
+  // Ground under the frame's lower edge is meadow in front of the eye; the far shore sits just below the horizon.
+  const bottom = onPlane(1120, REFERENCE_VIEW.height, 0);
+  assert.ok(bottom.z > 60 && bottom.z < 100, `bottom edge ground at ${bottom.z}`);
+  assert.ok(lakeDistance(bottom.x, bottom.z) > 0, 'the frame bottom shows meadow, not water');
+  assert.ok(lakeDistance(onPlane(1120, 1060, WATER_LEVEL).x, onPlane(1120, 1060, WATER_LEVEL).z) < 0, 'the lake fills the centre of the frame');
+  // Every painted summit keeps its traced elevation.
+  for (const m of MOUNTAINS) assert.ok(Math.abs(groundHeight(m.x, m.z) - m.peak) < 1 || groundHeight(m.x, m.z) > m.peak, m.id);
+  assert.ok(LAKE_OUTLINE.length > 20);
+});
+check('starfall lake builds a compact, finite, unlit painted world', () => {
+  const scene = new Scene(engine);
+  const before = scene.meshes.length;
+  const world = new StarfallLake(scene);
+  const meshes = scene.meshes.slice(before);
+  assert.ok(meshes.length > 20 && meshes.length < 250, `meshes: ${meshes.length}`);
+  const vertices = meshes.reduce((sum, mesh) => sum + mesh.getTotalVertices(), 0);
+  assert.ok(vertices < 1_500_000, `vertices: ${vertices}`);
+  for (const mesh of meshes) {
+    assert.ok(mesh.getTotalVertices() > 0, `empty geometry: ${mesh.name}`);
+    mesh.computeWorldMatrix(true);
+    assert.ok(mesh.getBoundingInfo().boundingBox.minimumWorld.asArray().every(Number.isFinite), mesh.name);
+  }
+  assert.ok(scene.getMeshByName('starfall-sky-dome')?.infiniteDistance);
+  assert.ok(scene.getMeshByName('starfall-water'));
+  const sky = scene.getTextureByName('starfall-sky');
+  assert.ok(sky && sky.getSize().width === SKY.width && sky.getSize().height === SKY.height);
+  assert.equal(world.environment.toneMapping, false, 'painted colours are shown exactly');
+  assert.ok(world.flightBounds.center.subtract(world.startPosition).length() < world.flightBounds.radius - 500);
+  assert.ok(world.startPosition.y - groundHeight(world.startPosition.x, world.startPosition.z) > 12, 'launch hovers above the meadow');
+  assert.ok(world.openingLensShift! < -0.5, 'desktop opening view drops the horizon like the painting');
+  world.setEnabled(false);
+  assert.ok(meshes.every((mesh) => !mesh.isEnabled(false)));
+  world.setEnabled(true);
+  assert.ok(meshes.every((mesh) => mesh.isEnabled(false)));
+  assert.equal(world.navigate(world.startPosition, Vector3.Forward()).region, 'Launch Meadow');
+  assert.ok(world.navigate(new Vector3(-20, 50, 1050), Vector3.Forward()).region === 'Starfall Lake');
+
+  // Ground, sphere and monolith are solid; water is pass-through down to the lake bed.
+  const ground = world.resolveFlightMotion(world.startPosition.clone(), new Vector3(0, -40, 0));
+  assert.ok(ground && ground.normal.y > 0.7 && ground.displacement.length() < 40 && ground.speedScale < 0.7);
+  const dome = world.resolveFlightMotion(new Vector3(-316, 84, 380), new Vector3(0, 0, 120));
+  assert.ok(dome && dome.normal.z < -0.8, 'sphere deflects a head-on approach');
+  const toMonolith = new Vector3(663, 600, 608).subtract(new Vector3(420, 600, 380));
+  const monolith = world.resolveFlightMotion(new Vector3(420, 600, 380), toMonolith);
+  assert.ok(monolith && Vector3.Dot(monolith.normal, toMonolith.normalizeToNew()) < -0.5, 'obsidian monolith is solid');
+  assert.equal(world.resolveFlightMotion(new Vector3(0, 6, 700), new Vector3(0, -12, 0)), null, 'water surface is pass-through');
+  assert.equal(world.resolveFlightMotion(new Vector3(0, 300, 900), new Vector3(0, 0, 40)), null, 'open air is clear');
+  console.log(`Starfall: ${meshes.length} meshes, ${vertices} vertices`);
+  scene.dispose();
+});
+check('sky islands toggles all of its own meshes when another world is chosen', () => {
+  const scene = new Scene(engine);
+  const world = new SkyWorld(scene);
+  assert.ok(scene.getMeshByName('sky-dome'), 'sky islands owns its sky');
+  world.setEnabled(false);
+  assert.ok(scene.meshes.every((mesh) => !mesh.isEnabled(false)));
+  world.setEnabled(true);
+  assert.equal(world.navigate(WORLD_REGIONS[0].position, Vector3.Forward()).region, 'Neon City');
   scene.dispose();
 });
 engine.dispose();

@@ -5,6 +5,7 @@ A ridiculous, comfort-first WebXR flight playground for Meta Quest. Calibrate in
 This repository contains the first playable vertical slice:
 
 - Objective-free exploration with no score, collectibles, timer, or finish line
+- Two worlds to pick from the main menu: **Sky Islands** and **Starfall Lake**
 - Floating waterfall islands, crystal pools, neon skylines, and tranquil tree groves
 - Arm-driven Superman/Peter Pan flight with independent head tracking
 - Neutral-head calibration designed for prone play
@@ -39,9 +40,24 @@ Open the printed local URL. Choose **Play on desktop**, set your neutral pose, t
 
 Hold **Shift** for fast flight: desktop top speed is **160 m/s (576 km/h)**, or **100 m/s (360 km/h)** with comfort mode on. W/S adjusts a persistent speed setting, initially 20% (32/20 m/s); Space brakes to zero. Mouse displacement aims directly with a short smoothing response rather than lingering turn inertia. Banking does not invert steering. Desktop-only field-of-view widening reinforces speed; headset field of view is unchanged. Focus loss and mouse capture loss pause desktop flight and clear held inputs.
 
-## One connected world
+## Worlds
 
-There is no environment selector or loading screen: all five districts coexist. From launch, **Neon City is ahead, Quiet Forest is to the right, Azure Falls is to the left, and Sky Harbor is beyond the city**. Wild Gardens sits beyond the falls. Broad, tree-lined land connections link the districts into one traversable landscape.
+Pick a world on the main menu before choosing how to fly; the scene behind the menu switches to show it, and the choice is remembered on this device. **Pause → Change world** returns to the menu (and leaves VR) to pick again. Each world is built the first time it is chosen.
+
+### Starfall Lake
+
+A retro-future valley painted in the style of a 1980s anime background: a starry dusk sky with a pale moon and a shooting star over a daylit lake, a great panelled sphere on the west shore, twin spires standing on blue mountains, sharp snow needles, and colossal fluted monoliths on both banks.
+
+- The desktop opening view reproduces the reference painting's composition. The camera hovers 18 m over the meadow, looks level, and uses a two-point-perspective lens shift so the horizon sits low in the frame and the monoliths stay vertical. The shift eases away as flight begins; headsets always start level with no shift.
+- Landmarks are placed from where they appear in a 2240 × 1228 reference frame (`src/game/starfall/reference.ts`), so the composition holds however far away each one is.
+- Everything is vertex-painted and unlit (no tone mapping), so the sampled gouache palette shows exactly. Light rakes in from the upper left; shadows are blue.
+- The sky is a texture painted once at load: gradient, about 4,600 stars, the moon and meteor, stratus streaks and cauliflower cumulus banks traced from the painting. Occasional shooting stars cross the sky while you fly.
+- Behind and beside the opening view the valley continues in the same style: an obelisk avenue leads to a smaller observatory sphere, more monoliths ring the meadow, and pale ranges close the horizon all round.
+- The ground, mountains, crag, sphere, monoliths, towers, obelisks and large trees are solid; the water and sky are pass-through. The desktop HUD names landmarks such as The Sphere, Obelisk Shore, Twin Spires and Needle Peaks.
+
+### Sky Islands
+
+There is no loading screen between districts: all five districts coexist. From launch, **Neon City is ahead, Quiet Forest is to the right, Azure Falls is to the left, and Sky Harbor is beyond the city**. Wild Gardens sits beyond the falls. Broad, tree-lined land connections link the districts into one traversable landscape.
 
 Fly toward the floating district signs (visible in desktop and VR). The desktop HUD shows your current district, speed in km/h, and arrows/distances to nearby districts; arrows are relative to the direction you are looking.
 
@@ -107,4 +123,4 @@ Controller grip poses are sampled from the current XR frame. Left/right hand mes
 
 The city districts contain roughly 1 km of streets each, with windowed towers, sidewalks, roof equipment and open avenues. Forest islands span 1.4–1.6 km, with mixed broadleaf/conifer canopies, lakes and winding flight corridors. At moderate speed, crossing a district now takes tens of seconds. Opaque scenery is batched by material and 480 m area for spatial culling, with simpler foliage beyond 700 m. A 4,500 m radius sphere encloses the enlarged landscape.
 
-`npm test` covers speed continuity, head/arm independence, calibrated coordinate agreement, 90°/180° turns, bank/stunt state transitions at multiple frame rates, roll pivot/heading preservation, hover recovery, keyboard/mouse mappings and free look, boundary departure, arm geometry and world generation. `tests/preview.html` adds synthetic head tilt, hand poses, roll settings and bank/roll/hover presets; it is development-only and excluded from the production entrypoint.
+`npm test` also builds Starfall Lake headlessly and checks its reference-camera mapping, mesh budget, collisions and landmark navigation, plus world selection. It covers speed continuity, head/arm independence, calibrated coordinate agreement, 90°/180° turns, bank/stunt state transitions at multiple frame rates, roll pivot/heading preservation, hover recovery, keyboard/mouse mappings and free look, boundary departure, arm geometry and world generation. `tests/preview.html` adds synthetic head tilt, hand poses, roll settings and bank/roll/hover presets; it is development-only and excluded from the production entrypoint.

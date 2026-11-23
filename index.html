@@ -21,8 +21,10 @@
         <p class="eyebrow">Rule number one</p>
         <h1>Stay<br /><span>Fly</span></h1>
         <p class="intro">
-          Fly wherever you want. Cruise past waterfalls, skyscrapers, and quiet islands in the clouds.
+          Fly wherever you want. Pick a world, then cruise past waterfalls, skyscrapers, colossal monoliths and quiet lakes.
         </p>
+
+        <div id="world-picker" class="world-picker" role="radiogroup" aria-label="Choose a world"></div>
 
         <div class="actions">
           <button id="enter-vr" class="primary" type="button" disabled>
@@ -42,7 +44,7 @@
         <p id="xr-status" class="status">Checking WebXR support…</p>
         <p class="desktop-guide">Desktop: mouse or arrows steer (↑ climbs). W/S adjusts speed; Shift boosts; Space hovers. Hold Q/E to bank, double-tap to roll. Hold Alt + mouse to look around. Click the scene to capture the mouse.</p>
         <p class="privacy-note">Hand tracking uses your camera locally, with no audio, recording or uploads. A live tracking preview stays in the corner while you fly.</p>
-        <p class="world-guide">One connected world: city ahead, forest to the right, waterfalls to the left, harbor beyond the city. Fly toward the district signs—no map switching.</p>
+        <p id="world-guide" class="world-guide"></p>
 
         <div class="safety-note">
           <span aria-hidden="true">✦</span>
@@ -121,6 +123,7 @@
           <button id="resume" class="primary" type="button">Resume</button>
           <button id="recalibrate" class="secondary" type="button">Recalibrate</button>
           <button id="restart" class="text-button" type="button">Return to launch</button>
+          <button id="change-world" class="text-button" type="button">Change world</button>
         </div>
       </div>
     </section>
